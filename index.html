@@ -1,0 +1,102 @@
+<!doctype html>
+<html>
+<head>
+  <title>Various type theories in JS</title>
+  <meta charset='UTF-8'>
+  <meta name='viewport' content='width=device-width, initial-scale=1'>
+  <meta name='keywords' content='type theory, lambda calculus, dependent types'>
+  <meta name='description' content='Sandbox for computing with various type theories.'>
+  <link rel='icon' type='image/x-icon' href='data:image/x-icon;base64,'>
+  <style>
+@font-face {
+  font-family: 'univers';
+  src: url('fonts/UniversNextTypewriter.woff')  format('woff'),
+      url('fonts/UniversNextTypewriter.woff2') format('woff2');
+  font-weight: normal;
+  font-style: normal
+}
+html {
+  margin: 0;
+  --pad: 10px;
+  font-size: 16px }
+body {
+  margin: 1px 2px 1px 1px;
+  overflow: hidden;
+  background: #222;
+  color: #fff }
+main {
+  display: grid;
+  width: 100%;
+  grid-gap: 1px }
+#source, #log {
+  width: calc(100vw - 2 * var(--pad) - 2px);
+  height: calc(50vh - 2 * var(--pad) - 1.5px);
+  box-shadow: 0 0 0 1px #444;
+  padding: var(--pad);
+  line-height: 1.2rem }
+#source {
+  border: 0;
+  margin: 0;
+  outline: 0;
+  background: transparent;
+  min-height: 1.6rem;
+  max-height: calc(100vh - 22px - 2rem);
+  resize: vertical;
+  font-size: inherit;
+  font-family: 'univers';
+  font-variant-ligatures: none;
+  color: #fff }
+#log {
+  font-family: 'univers';
+  font-variant-ligatures: none;
+  overflow-y: auto;
+  word-break: break-all }
+button {
+  position: absolute;
+  top: 10px;
+  right: 10px }
+hr {
+  border: 0;
+  height: 0;
+  border-top: 1px solid #333 }
+  </style>
+</head>
+<body>
+  <main>
+    <textarea id='source'></textarea>
+    <div id='log'></div>
+  </main>
+  <button id='run'>Run</button>
+  <script src="js/tt.js"></script>
+  <script src="js/machine.js"></script>
+  <script>
+let sourceTextbox = $('#source')[0],
+    logDiv = $('#log')[0],
+    runButton = $('#run')[0],
+    adjustHeight = () => logDiv.style.height =
+      window.innerHeight - 23 - sourceTextbox.offsetHeight + 'px',
+    log = (...args) => {
+      logDiv.childNodes.length && logDiv.appendChild(document.createElement('hr'));
+      // args.forEach(arg => logDiv.innerText += arg) };
+      logDiv.appendChild(document.createTextNode(args.join(' '))) };
+new MutationObserver(adjustHeight).observe(
+  sourceTextbox, { attributes: true, attributeFilter: [ "style" ] });
+$.queries({
+  button: {
+    click () {
+      try { (async () => {
+        let S = TT();
+        log((await S.import({code: sourceTextbox.value})).context.definitions)
+      })()
+        .catch(e => log(e.message))
+        .then(() => $('#log')[0].scrollTo(0, 1e6)) }
+      catch (e) { log(e.message) }
+    }
+  }
+});
+fetch("examples/test.r2").then(res => res.text())
+  .then(t => sourceTextbox.innerHTML = t)
+  </script>
+  <noscript><h6>Only viewable with JavaScript enabled.</h6></noscript>
+</body>
+</html>
