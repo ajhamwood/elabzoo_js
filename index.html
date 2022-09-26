@@ -13,8 +13,15 @@
   src: url('fonts/UniversNextTypewriter.woff')  format('woff'),
       url('fonts/UniversNextTypewriter.woff2') format('woff2');
   font-weight: normal;
-  font-style: normal
-}
+  font-style: normal;
+  font-display: swap }
+@font-face {
+  font-family: 'literata';
+  src: url('fonts/Literata-Regular.woff2') format('woff2'),
+      url('fonts/Literata-Regular.woff') format('woff');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap }
 html {
   margin: 0;
   --pad: 10px;
@@ -23,32 +30,77 @@ body {
   margin: 1px 2px 1px 1px;
   overflow: hidden;
   background: #222;
-  color: #fff }
+  color: #eee }
 main {
   display: grid;
+  grid-template-columns: 1.8rem 1fr;
   width: 100%;
   grid-gap: 1px }
+main.nav-expand {
+  grid-template-columns: 15rem 1fr }
+nav {
+  font-family: 'literata';
+  grid-row: 1 / span 2;
+  padding: .4rem }
+main.nav-expand > nav {
+  display: flex;
+  gap: .4rem;
+  flex-flow: column nowrap }
+main:not(.nav-expand) > nav { cursor: pointer }
+main:not(.nav-expand) > nav:hover {
+  border: .2rem #555 solid;
+  background-color: #222; }
+main:not(.nav-expand) > nav > * { display: none }
+nav > .ui-title { font-size: large }
+nav > .arrow {
+  font-size: large;
+  --cursorY: 50vh;
+  position: absolute;
+  display: none;
+  left: .7rem;
+  top: calc(var(--cursorY) - .7rem);
+  user-select: none }
+main:not(.nav-expand) > nav > .arrow::before { content: "→" }
+main.nav-expand > nav > .arrow::before { content: "←" }
+main:not(.nav-expand) > nav:hover > .arrow { display: block }
+main.nav-expand > nav > .arrow {
+  display: block;
+  left: 13.8rem;
+  cursor: pointer }
+main.nav-expand > nav > .arrow:hover {
+  top: calc(var(--cursorY) - .9rem);
+  left: 13.6rem;
+  border: .2rem #555 solid }
+#ui { width: min-content }
+#ui > input[type='radio'] { display: none }
+#ui > input[type='radio'] + label {
+  display: block;
+  white-space: pre;
+  padding: .1rem;
+  cursor: pointer }
+#ui > input[type='radio']:not(:checked) + label:hover { background-color: #ff6700; }
+#ui > input[type='radio']:checked + label {
+  background-color: #eee;
+  color: #000 }
 #source, #log {
-  width: calc(100vw - 2 * var(--pad) - 2px);
+  width: calc(100% - 2 * var(--pad) + 1px);
   height: calc(50vh - 2 * var(--pad) - 1.5px);
   box-shadow: 0 0 0 1px #444;
+  background: transparent;
   padding: var(--pad);
-  line-height: 1.2rem }
+  line-height: 1.2rem;
+  font-size: inherit;
+  font-family: 'univers';
+  font-variant-ligatures: none }
 #source {
   border: 0;
   margin: 0;
   outline: 0;
-  background: transparent;
   min-height: 1.6rem;
   max-height: calc(100vh - 22px - 2rem);
   resize: vertical;
-  font-size: inherit;
-  font-family: 'univers';
-  font-variant-ligatures: none;
-  color: #fff }
+  color: #eee }
 #log {
-  font-family: 'univers';
-  font-variant-ligatures: none;
   overflow-y: auto;
   word-break: break-all }
 button {
@@ -63,6 +115,14 @@ hr {
 </head>
 <body>
   <main>
+    <nav>
+      <div class="arrow"></div>
+      <span class="ui-title">Choose type theory:</span>
+      <form id="ui">
+        <input type="radio" name="tts" id="1" checked/><label for="1">Untyped lambdas</label>
+        <input type="radio" name="tts" id="2"/><label for="2">Dependent types</label>
+      </form>
+    </nav>
     <textarea id='source'></textarea>
     <div id='log'></div>
   </main>
@@ -70,6 +130,7 @@ hr {
   <script src="js/tt.js"></script>
   <script src="js/machine.js"></script>
   <script>
+var app = new $.Machine({ S: null, tt: 1 });
 let sourceTextbox = $('#source')[0],
     logDiv = $('#log')[0],
     runButton = $('#run')[0],
@@ -77,24 +138,55 @@ let sourceTextbox = $('#source')[0],
       window.innerHeight - 23 - sourceTextbox.offsetHeight + 'px',
     log = (...args) => {
       logDiv.childNodes.length && logDiv.appendChild(document.createElement('hr'));
-      // args.forEach(arg => logDiv.innerText += arg) };
       logDiv.appendChild(document.createTextNode(args.join(' '))) };
 new MutationObserver(adjustHeight).observe(
   sourceTextbox, { attributes: true, attributeFilter: [ "style" ] });
+$.targets({
+  load () {
+    app.emit("selectTT", $("#ui > input[type='radio']:checked")[0].id);
+    let navClick = { click () {
+          $("main")[0].classList.add("nav-expand");
+          $.queries({
+            nav: { click: "click" },
+            "nav > .arrow": arrowClick
+          })
+        } },
+        arrowClick = { click (e) {
+          e.stopPropagation();
+          $("main")[0].classList.remove("nav-expand");
+          $.queries({
+            "nav > .arrow": { click: "click" },
+            nav: navClick
+          })
+        } };
+    $.queries({ nav: navClick })
+  },
+  app: {
+    selectTT (i) {
+      this.tt = i;
+      if (this.S === null) this.S = TT({which: i});
+      else {
+        this.S.select(i)
+      }
+    }
+  }
+})
 $.queries({
   button: {
     click () {
       try { (async () => {
-        let S = TT();
-        log((await S.import({code: sourceTextbox.value})).context.definitions)
+        log((await app.state().S.import({code: sourceTextbox.value})).context.definitions)
       })()
-        .catch(e => log(e.message))
+        .catch(e => { log(e.message); console.error(e) })
         .then(() => $('#log')[0].scrollTo(0, 1e6)) }
       catch (e) { log(e.message) }
     }
+  },
+  "#ui > input[type='radio']": {
+    change (e) { if (e.target.checked) app.emit("selectTT", this.id) }
   }
 });
-fetch("examples/test.r2").then(res => res.text())
+fetch("examples/eval-closures-debruijn.r2").then(res => res.text())
   .then(t => sourceTextbox.innerHTML = t)
   </script>
   <noscript><h6>Only viewable with JavaScript enabled.</h6></noscript>

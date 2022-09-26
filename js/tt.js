@@ -1,5 +1,5 @@
 var TT = (options = {}) => {
-  let { debug } = options;
+  let { debug, which } = options;
   debug = debug ? console : new Proxy({}, { get() { return () => {} } });
   
   class Result {  // Error handling
@@ -45,10 +45,13 @@ var TT = (options = {}) => {
   class VLam { constructor (e) { this.env = e } }
 
   class Parser {
-    static reql (p1, p2) { return state => p1(state).then(() => p2(state)) }
-    static reqr (p1, p2) { return state => p1(state).then(s1 => p2(s1).then(() => s1)) }
-    static map (p, fn) { return state => p(state).then(fn) }
-    // static subst (p, s) { return state => p(state).then(() => s) }
+    static seq (ps) { return state => ps.reduce((acc, p) => acc.then(p), Result.pure(state)) }
+    static do (ps) { return state =>
+      ps.reduce((acc, p) => (...ss) => acc(...ss).then(s => p(...ss, s)), Result.pure)(state) }
+    static reql (p1, p2) { return state => p1(state).then(s1 => p2({ ...s1, data: state.data })) }
+    static reqr (p1, p2) { return state => p1(state).then(s1 => p2(s1).then(s2 => ({ ...s2, data: s1.data }))) }
+    static map (p, fn) { return state => p(state).then(s => ({ ...s, data: fn(s.data) })) }
+    // static subst (p, data) { return state => p(state).then(s2 => ({ ...s2, data })) }
 
     // static fail (state) { return new Result((ok, err) => err({ ...state, fail: "_"})) }
     // static err (msg) { return state => new Result.throw({ ...state, fail: msg }) }
@@ -97,43 +100,6 @@ var TT = (options = {}) => {
     }
   }
 
-  let deBruijnClosures1 = new Parser({
-        ws (state) { return Parser.many(Parser.choice([
-          Parser.satisfy(s => /[^\S\r\n]/g.test(s.data), "_HWS"),
-          Parser.satisfy(s => /\r\n?|\n/g.test(s.data), "_VWS"),
-          st => this.symbol(Parser.satisfy(s => s.data === "--"[s.offset - state.offset - 1], "_Comment"))(st)
-            .then(Parser.scan(s => /\r\n?|\n/g.test(s.data), "_Comment"))
-        ]))(state) },
-        symbol (p) { return Parser.many(p) },
-        parens (p) { return state => Parser.char("(")(state)
-          .then(s1 => p({ ...s1, data: state.data})
-            .then(s2 => Parser.char(")")(s2)
-              .then(s3 => ({ ...s3, data: s2.data})))) },
-        keyword (str) { return state => this.symbol(
-          Parser.satisfy(s => s.data === str[s.offset - state.offset - 1], "_Keyword: " + str))(state)
-            .then(s1 => this.ws(s1).then(s2 => ({ ...s2, data: s1.data.join("") }))) },
-
-        ix (state) { return this.symbol(Parser.satisfy(s => /\d/g.test(s.data), "_Index"))(state) },
-        atom (state) { return Parser.alt(
-          Parser.map(this.ix, s => ({ ...s, data: new RVar(parseInt(s.data)) })),
-          this.parens(this.term))(state)
-            .then(s1 => Parser.option(this.ws)(s1).then(s2 => ({ ...s2, data: s1.data }))) },
-        spine (state) { return Parser.many(this.atom)(state)
-          .then(s => ({ ...s, data: s.data.reduce((acc, data) => new RApp(acc, data)) })) },
-
-        lam (state) { return this.keyword("\\")(state)  // Allow "\0" ?
-          .then(Parser.map(this.term, s => ({ ...s, data: new RLam(s.data) }))) },
-        let (state) { return this.keyword("let")(state).then(s => this.term(s)
-          .then(t => this.keyword(";")(t).then(this.term)
-            .then(u => ({ ...u, data: new RLet(t.data, u.data) })))) },
-        
-        term (state) { return Parser.choice([ this.lam, this.let, this.spine ])(state) },
-        parse (state) {
-          debug.log("Parse:");
-          return Parser.option(this.ws)(state).then(Parser.reqr(this.term, Parser.eof))
-        }
-      });
-
   class Evaluator {
     static debug (sw) {
       for (let k in sw) sw[k] = (f => function () { debug.log(k); return f() })(sw[k]);
@@ -152,38 +118,78 @@ var TT = (options = {}) => {
     }
   }
 
-  let untypedLC = new Evaluator({
-    eval ({ term, ctx }) { return Evaluator.debug({
-      rvar: () => ctx[ctx.length - term.ix - 1],
-      rapp: () => ((func, arg) => func.constructor.name === "VLam" ?
-        this.cApp(func.env, arg) : new VApp(func, arg))
-        (this.eval({ ctx, term: term.func }), this.eval({ ctx, term: term.arg })),
-      rlam: () => new VLam({ term: term.body, ctx }),
-      rlet: () => this.eval({ term: term.next, ctx: ctx.concat([this.eval({ ctx, term: term.term })]) })
-    })[term.constructor.name.toLowerCase()]() },
+  let deBruijnClosures1 = new Parser({
+        ws (state) { return Parser.many(Parser.choice([
+          Parser.satisfy(s => /[^\S\r\n]/g.test(s.data), "_HWS"),
+          Parser.satisfy(s => /\r\n?|\n/g.test(s.data), "_VWS"),
+          st => this.symbol(Parser.satisfy(s => s.data === "--"[s.offset - state.offset - 1], "_Comment"))(st)
+            .then(Parser.scan(s => /\r\n?|\n/g.test(s.data), "_Comment"))
+        ]))(state) },
+        symbol (p) { return Parser.many(p) },
+        parens (p) { return state => Parser.reql(
+          Parser.seq([ Parser.char("("), Parser.option(this.ws) ]),
+          Parser.reqr(p, Parser.char(")")))(state) },
+        keyword (str) { return state => Parser.map(Parser.reqr(
+          this.symbol(Parser.satisfy(s => s.data === str[s.offset - state.offset - 1], "_Keyword: " + str)),
+          this.ws), data => data.join(""))(state) },
 
-    cApp ({ term, ctx }, val) { return this.eval({ term, ctx: ctx.concat([val]) }) },
+        ix (state) { return this.symbol(Parser.satisfy(s => /\d/g.test(s.data), "_Index"))(state) },
+        atom (state) { return Parser.reqr(Parser.alt(
+          Parser.map(this.ix, data => new RVar(parseInt(data))),
+          this.parens(this.term)), Parser.option(this.ws))(state) },
+        spine (state) { return Parser.map(Parser.many(this.atom),
+          data => data.reduce((acc, atom) => new RApp(acc, atom)))(state) },
 
-    quote (lvl, val) { return Evaluator.debug({
-      vvar: () => new RVar(lvl - val.lvl - 1),
-      vapp: () => new RApp(this.quote(lvl, val.func), this.quote(lvl, val.arg)),
-      vlam: () => new RLam(this.quote(lvl + 1, this.cApp(val.env, new VVar(lvl))))
-    })[val.constructor.name.toLowerCase()]() },
+        lam (state) { return Parser.seq([ this.keyword("\\"),  // Allow "\0" ?
+          Parser.map(this.term, data => new RLam(data)) ])(state) },
+        let (state) { return Parser.seq([ this.keyword("let"), this.term,
+          Parser.do([ Parser.seq([ this.keyword(";"), this.term ]),
+            (t, u) => ({ ...u, data: new RLet(t.data, u.data) }) ]) ])(state) },
 
-    nf (env) {
-      debug.log("Normal form:");
-      return { term: this.quote(env.ctx.length, this.eval(env)) }
-    }
-  });
+        term (state) { return Parser.choice([ this.lam, this.let, this.spine ])(state) },
+        parse (state) {
+          debug.log("Parse:");
+          return Parser.seq([ Parser.option(this.ws), Parser.reqr(this.term, Parser.eof) ])(state)
+        }
+      }),
+      untypedLC = new Evaluator({
+        eval ({ term, ctx }) { return Evaluator.debug({
+          rvar: () => ctx[ctx.length - term.ix - 1],
+          rapp: () => ((func, arg) => func.constructor.name === "VLam" ?
+            this.cApp(func.env, arg) : new VApp(func, arg))
+            (this.eval({ ctx, term: term.func }), this.eval({ ctx, term: term.arg })),
+          rlam: () => new VLam({ term: term.body, ctx }),
+          rlet: () => this.eval({ term: term.next, ctx: ctx.concat([this.eval({ ctx, term: term.term })]) })
+        })[term.constructor.name.toLowerCase()]() },
+
+        cApp ({ term, ctx }, val) { return this.eval({ term, ctx: ctx.concat([val]) }) },
+
+        quote (lvl, val) { return Evaluator.debug({
+          vvar: () => new RVar(lvl - val.lvl - 1),
+          vapp: () => new RApp(this.quote(lvl, val.func), this.quote(lvl, val.arg)),
+          vlam: () => new RLam(this.quote(lvl + 1, this.cApp(val.env, new VVar(lvl))))
+        })[val.constructor.name.toLowerCase()]() },
+
+        nf (env) {
+          debug.log("Normal form:");
+          return { term: this.quote(env.ctx.length, this.eval(env)) }
+        }
+      });
 
   const sequence = (p => fn => p = fn ? p.then(fn) : p)(Promise.resolve());
-  return Object.defineProperty({}, "import", { get() {
-    return opt => sequence(() => new Promise((ok, err) => {
-      opt ??= {};
-      if ("code" in opt && !("path" in opt)) ok(opt.code);
-      else if ("path" in opt) fetch(opt.path).then(rsp => rsp.text()).then(ok);
-      else err(new Error("Load error: option object malformed or missing"));
-    }).then(src => deBruijnClosures1.parse(src).then(untypedLC.nf).toPromise())
-      .then(result => ({ context: { definitions: result.term } })))
-  } })
+  return Object.defineProperties({}, {
+    import: { get() {
+      return opt => sequence(() => new Promise((ok, err) => {
+        opt ??= {};
+        if ("code" in opt && !("path" in opt)) ok(opt.code);
+        else if ("path" in opt) fetch(opt.path).then(rsp => rsp.text()).then(ok);
+        else err(new Error("Load error: option object malformed or missing"));
+      }).then(({
+        1: src => deBruijnClosures1.parse(src).then(untypedLC.nf).toPromise(),
+        2: () => ({ term: "TBD" })
+      })[which ?? 1])
+        .then(result => ({ context: { definitions: result.term } })))
+    } },
+    select: { get() { return i => which = i } }
+  })
 }
