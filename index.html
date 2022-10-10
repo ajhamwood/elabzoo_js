@@ -22,6 +22,14 @@
   font-weight: normal;
   font-style: normal;
   font-display: swap }
+@font-face {
+  font-family: 'literata';
+  src: url('fonts/Literata-Bold.woff2') format('woff2'),
+      url('fonts/Literata-Bold.woff') format('woff');
+  font-weight: bold;
+  font-style: normal;
+  font-display: swap }
+
 html {
   margin: 0;
   --pad: 10px;
@@ -51,7 +59,9 @@ main:not(.nav-expand) > nav:hover {
   border: .2rem #555 solid;
   background-color: #222; }
 main:not(.nav-expand) > nav > * { display: none }
-nav > .ui-title { font-size: large }
+nav > .ui-title {
+  font-size: large;
+  font-weight: bold }
 nav > .arrow {
   font-size: large;
   --cursorY: 50vh;
@@ -78,7 +88,7 @@ main.nav-expand > nav > .arrow:hover {
   white-space: pre;
   padding: .1rem;
   cursor: pointer }
-#ui > input[type='radio']:not(:checked) + label:hover { background-color: #ff6700; }
+#ui > input[type='radio']:not(:checked) + label:hover { background-color: #ff6700 }
 #ui > input[type='radio']:checked + label {
   background-color: #eee;
   color: #000 }
@@ -102,11 +112,27 @@ main.nav-expand > nav > .arrow:hover {
   color: #eee }
 #log {
   overflow-y: auto;
-  word-break: break-all }
-button {
+  word-break: break-all;
+  white-space: pre-wrap }
+#repl {
   position: absolute;
   top: 10px;
-  right: 10px }
+  right: 10px;
+  font-family: 'literata' }
+#repl > * {
+  background-color: #eee;
+  color: #000;
+  white-space: pre;
+  padding: .1rem;
+  cursor: pointer }
+#run[data-state='load']::before { content: "Load" }
+#run[data-state='load']:hover,
+  #run[data-state='run'] ~ .run-option:hover {
+    background-color: #ff6700;
+    color: #eee }
+  #run[data-state='run'] ~ .run-option { display: none }
+  #repl:hover > #run[data-state='run'] ~ .run-option { display: block }
+#run[data-state='run']::before { content: "Run" }
 hr {
   border: 0;
   height: 0;
@@ -123,14 +149,19 @@ hr {
         <input type="radio" name="tts" id="2"/><label for="2">Dependent types</label>
       </form>
     </nav>
-    <textarea id='source'></textarea>
-    <div id='log'></div>
+    <textarea id="source" spellcheck="false"></textarea>
+    <div id="log"></div>
   </main>
-  <button id='run'>Run</button>
+  <div id="repl">
+    <div id="run" data-state="load"></div>
+  </div>
+  <template id="run-option">
+    <div class="run-option"></div>
+  </template>
   <script src="js/tt.js"></script>
   <script src="js/machine.js"></script>
   <script>
-var app = new $.Machine({ S: null, tt: 1 });
+var app = new $.Machine({ S: null, tt: null, ready: null });
 let sourceTextbox = $('#source')[0],
     logDiv = $('#log')[0],
     runButton = $('#run')[0],
@@ -138,12 +169,14 @@ let sourceTextbox = $('#source')[0],
       window.innerHeight - 23 - sourceTextbox.offsetHeight + 'px',
     log = (...args) => {
       logDiv.childNodes.length && logDiv.appendChild(document.createElement('hr'));
-      logDiv.appendChild(document.createTextNode(args.join(' '))) };
+      logDiv.appendChild(document.createTextNode(args.join('\n'))) };
 new MutationObserver(adjustHeight).observe(
   sourceTextbox, { attributes: true, attributeFilter: [ "style" ] });
 $.targets({
   load () {
-    app.emit("selectTT", $("#ui > input[type='radio']:checked")[0].id);
+    $("#ui > input[type='radio']")[1].setAttribute("checked", "");
+    app.emit("selectTT", 2);
+    // app.emit("selectTT", $("#ui > input[type='radio']:checked")[0].id);
     let navClick = { click () {
           $("main")[0].classList.add("nav-expand");
           $.queries({
@@ -163,31 +196,61 @@ $.targets({
   },
   app: {
     selectTT (i) {
-      this.tt = i;
-      if (this.S === null) this.S = TT({which: i});
+      this.tt = parseInt(i);
+      app.emit("fetchExample");
+      if (this.S === null) this.S = TT({debug: false, which: i});
       else {
         this.S.select(i)
       }
+    },
+    fetchExample () {
+      fetch(`examples/${[
+        "01-eval-closures-debruijn",
+        "02-typecheck-closures-debruijn"
+      ][this.tt - 1]}.r2`).then(res => res.text())
+        .then(t => sourceTextbox.innerHTML = t)
+    },
+    ready (o) {
+      $("#run")[0].dataset.state = "run";
+      this.ready = o;
+      for (let meth in o) {
+        let opt = $.load("run-option", "#repl")[0][0];
+        opt.innerText = meth;
+        opt.dataset.method = meth;
+      }
+      $.queries({ "#repl > .run-option": { click () {
+        app.emit("run", async () => {
+          log(...await app.state().ready[this.dataset.method].run().then(o => Object.entries(o).map(([k, v]) => `${k}: ${v}`)))
+        })
+      } } })
+    },
+    run (fn) {
+      fn().catch(e => { log(e.message); "stack" in e ? console.warn(e) : console.warn(e.message) })
+        .then(() => $('#log')[0].scrollTo(0, 1e6))
     }
   }
 })
 $.queries({
-  button: {
+  "#run": {
     click () {
-      try { (async () => {
-        log((await app.state().S.import({code: sourceTextbox.value})).context.definitions)
-      })()
-        .catch(e => { log(e.message); console.error(e) })
-        .then(() => $('#log')[0].scrollTo(0, 1e6)) }
-      catch (e) { log(e.message) }
+      if (this.dataset.state === "load") app.emit("run", async () => {
+        let { ready } = await app.state().S.import({code: sourceTextbox.value});
+        app.emit("ready", ready)
+      })
+    }
+  },
+  "#source": {
+    input () {
+      if ($("#run")[0].dataset.state === "run") {
+        $("#run")[0].dataset.state = "load";
+        $("#run ~ .run-option").map(el => el.remove())
+      }
     }
   },
   "#ui > input[type='radio']": {
     change (e) { if (e.target.checked) app.emit("selectTT", this.id) }
   }
-});
-fetch("examples/eval-closures-debruijn.r2").then(res => res.text())
-  .then(t => sourceTextbox.innerHTML = t)
+})
   </script>
   <noscript><h6>Only viewable with JavaScript enabled.</h6></noscript>
 </body>
