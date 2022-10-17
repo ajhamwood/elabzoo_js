@@ -81,11 +81,11 @@ main.nav-expand > nav > .arrow:hover {
   top: calc(var(--cursorY) - .9rem);
   left: 13.6rem;
   border: .2rem #555 solid }
-#ui { width: min-content }
+#ui { width: fit-content }
 #ui > input[type='radio'] { display: none }
 #ui > input[type='radio'] + label {
   display: block;
-  white-space: pre;
+  white-space: pre-wrap;
   padding: .1rem;
   cursor: pointer }
 #ui > input[type='radio']:not(:checked) + label:hover { background-color: #ff6700 }
@@ -147,7 +147,8 @@ hr {
       <form id="ui">
         <input type="radio" name="tts" id="1"/><label for="1">Untyped lambdas</label>
         <input type="radio" name="tts" id="2"/><label for="2">Dependent types</label>
-        <input type="radio" name="tts" id="3" checked/><label for="3">Dependent types with holes</label>
+        <input type="radio" name="tts" id="3" checked/><label for="3">DT with holes</label>
+        <input type="radio" name="tts" id="4"/><label for="4">DT with implicit arguments</label>
       </form>
     </nav>
     <textarea id="source" spellcheck="false"></textarea>
@@ -206,7 +207,8 @@ $.targets({
       fetch(`examples/${[
         "01-eval-closures-debruijn",
         "02-typecheck-closures-debruijn",
-        "03-holes"
+        "03-holes",
+        "04-implicit-args"
       ][this.tt - 1]}.r2`).then(res => res.text())
         .then(t => sourceTextbox.innerHTML = t)
     },
@@ -221,7 +223,7 @@ $.targets({
       $.queries({ "#repl > .run-option": { click () {
         app.emit("run", async () => {
           log(...await app.state().ready[this.dataset.method].run()
-            .then(o => Object.entries(o).map(([k, v]) => `${k}: ${v}`)))
+            .then(o => Object.entries(o ?? {}).map(([k, v]) => `${k}: ${v}`)))
         })
       } } })
     },

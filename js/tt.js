@@ -140,6 +140,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
 
   class Context {
     constructor ({contextData = {}, astData, parserData, evaluatorData: [ edata, ...eexports ], debugHandler}) {
+      contextData = { local: contextData.local ?? {}, global: contextData.global ?? {} };
       let optCtx = (o, ctx) => o.constructor.name === "Function" ? o(ctx) : o,
           keepCtx = (o = {}) => Object.fromEntries(Object.entries(o).map(([k, v]) => ([k, v instanceof Array ? [...v] :
             [Map, Set, WeakMap, WeakSet].some(kl => kl === v.constructor) ? new v.constructor([...v.entries()]) : v]))),
@@ -807,12 +808,39 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
               .then(({ term }) => ({ term, metas: Array.from(gctx.metas)
                 .map(([m, e]) => `let ?${m} = ${e === null ? "?" : this.quote({ lvl: 0, val: e }) };`).join("\n") })) },
           displayError ({ msg }, err) {
-            console.log(gctx);
             let lines = ctx.source.split(/\r\n?|\n/);
             return err({ message: `${msg}\n${lines[gctx.pos[0][0] - 1]}\n${"-".repeat(gctx.pos[0][1] - 1)}${
               "^".repeat(gctx.pos[1][1] - gctx.pos[0][1])} ${gctx.pos.join("-")}` }) }
         }), "nf", "type", "elab" ]
       });
+
+  let dtimp = new Context({
+    debugHandler: p => ({}, prop) => p !== true && p !== dtimp.phase ? () => {} :
+      prop === "log" ? (v, ...rest) => {
+        let declutter = v => { if (v?.hasOwnProperty("source")) { let { source, ...o } = v; return [o] } else return [v] };
+        console.log(...(typeof v === "string" ? [v] : declutter(v)), ...rest.flatMap(declutter)
+          .flatMap((o, i) => [ ...(i === 0 ? ["|"] : []), "{",
+            ...Object.entries(o).flatMap(([k, v], i, ar) => [`${k}:`,
+              typeof v === "string" ? `\`${v}\`` : AST.tag.isPrototypeOf(v?.constructor) ? `${v}` : v, ...(i === ar.length - 1 ? [] : [","])]), "}"]),
+          (stack => { try { throw new Error('') } catch (e) { stack = e.stack || "" }
+            return stack.split(`\n`)[5].replace(/@.*(js)/g, "") })()) } : console[prop],
+    
+    contextData: {
+      local: { env: [], types: [], bds: [], lvl: 0, pos: 0, names: [] },
+      global: { metas: new Map(), pos: [], source: "" } },
+
+    astData: ({ local: ctx }) => ({}),
+
+    parserData: ({ local: ctx, global: gctx }) => ({
+      parse () {}
+    }),
+
+    evaluatorData: [ ({ local: ctx, global: gctx }) => ({
+      nf () {},
+      type () {},
+      elab () {}
+    }), "nf", "type", "elab" ],
+  });
 
   const sequence = (p => fn => p = fn ? p.then(fn) : p)(Promise.resolve());
   return Object.defineProperties({}, {
@@ -821,18 +849,12 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
         if ("code" in opt && !("path" in opt)) ok(opt.code);
         else if ("path" in opt) fetch(opt.path).then(rsp => rsp.text()).then(ok);
         else err({ message: "Load error: option object malformed or missing" });
-      }).then(src => ({ ready: ({
-        1: { nf: { run: () => ulc.parse(src).then(ulc.nf).toPromise() } },
-        2: {
-          nf: { run: () => dt.parse(src).then(dt.nf).toPromise() },
-          type: { run: () => dt.parse(src).then(dt.type).toPromise() }
-        },
-        3: {
-          nf: { run: () => dth.parse(src).then(dth.nf).toPromise() },
-          type: { run: () => dth.parse(src).then(dth.type).toPromise() },
-          elab: { run: () => dth.parse(src).then(dth.elab).toPromise() }
-        }
-      })[which ?? 1] })))
+      }).then(src => ({ ready: (tts => tts.reduce((acc1, [tt, meths], i) => Object.assign(acc1, { [i + 1]:
+        meths.reduce((acc2, meth) => Object.assign(acc2, { [meth]: { run: () => tt.parse(src).then(tt[meth]).toPromise() } }), {})  }), {}))
+      ([[ulc, ["nf"]],
+        [dt, ["nf", "type"]],
+        [dth, ["nf", "type", "elab"]],
+        [dtimp, ["nf", "type", "elab"]]])[which ?? 1] })))
     } },
     select: { get() { return i => which = i } }
   })
