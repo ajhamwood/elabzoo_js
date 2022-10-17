@@ -93,17 +93,17 @@ main.nav-expand > nav > .arrow:hover {
   background-color: #eee;
   color: #000 }
 #source, #log {
-  width: calc(100% - 2 * var(--pad) + 1px);
-  height: calc(50vh - 2 * var(--pad) - 1.5px);
+  width: calc(100% - 2 * var(--pad) - 1em + 1px);
+  height: calc(50vh - 2 * var(--pad) - 1em - 1.5px);
   box-shadow: 0 0 0 1px #444;
   background: transparent;
   padding: var(--pad);
+  border: .5rem solid #222;
   line-height: 1.2rem;
   font-size: inherit;
   font-family: 'univers';
   font-variant-ligatures: none }
 #source {
-  border: 0;
   margin: 0;
   outline: 0;
   min-height: 1.6rem;
@@ -145,8 +145,9 @@ hr {
       <div class="arrow"></div>
       <span class="ui-title">Choose type theory:</span>
       <form id="ui">
-        <input type="radio" name="tts" id="1" checked/><label for="1">Untyped lambdas</label>
+        <input type="radio" name="tts" id="1"/><label for="1">Untyped lambdas</label>
         <input type="radio" name="tts" id="2"/><label for="2">Dependent types</label>
+        <input type="radio" name="tts" id="3" checked/><label for="3">Dependent types with holes</label>
       </form>
     </nav>
     <textarea id="source" spellcheck="false"></textarea>
@@ -169,14 +170,12 @@ let sourceTextbox = $('#source')[0],
       window.innerHeight - 23 - sourceTextbox.offsetHeight + 'px',
     log = (...args) => {
       logDiv.childNodes.length && logDiv.appendChild(document.createElement('hr'));
-      logDiv.appendChild(document.createTextNode(args.join('\n'))) };
+      logDiv.appendChild(document.createTextNode(args.join(/\r\n?|\n/g.test(args.join('')) ? '\n\n' : '\n'))) };
 new MutationObserver(adjustHeight).observe(
   sourceTextbox, { attributes: true, attributeFilter: [ "style" ] });
 $.targets({
   load () {
-    $("#ui > input[type='radio']")[1].setAttribute("checked", "");
-    app.emit("selectTT", 2);
-    // app.emit("selectTT", $("#ui > input[type='radio']:checked")[0].id);
+    app.emit("selectTT", $("#ui > input[type='radio']:checked")[0].id);
     let navClick = { click () {
           $("main")[0].classList.add("nav-expand");
           $.queries({
@@ -206,7 +205,8 @@ $.targets({
     fetchExample () {
       fetch(`examples/${[
         "01-eval-closures-debruijn",
-        "02-typecheck-closures-debruijn"
+        "02-typecheck-closures-debruijn",
+        "03-holes"
       ][this.tt - 1]}.r2`).then(res => res.text())
         .then(t => sourceTextbox.innerHTML = t)
     },
@@ -220,13 +220,20 @@ $.targets({
       }
       $.queries({ "#repl > .run-option": { click () {
         app.emit("run", async () => {
-          log(...await app.state().ready[this.dataset.method].run().then(o => Object.entries(o).map(([k, v]) => `${k}: ${v}`)))
+          log(...await app.state().ready[this.dataset.method].run()
+            .then(o => Object.entries(o).map(([k, v]) => `${k}: ${v}`)))
         })
       } } })
     },
     run (fn) {
       fn().catch(e => { log(e.message); "stack" in e ? console.warn(e) : console.warn(e.message) })
         .then(() => $('#log')[0].scrollTo(0, 1e6))
+    },
+    reset () {
+      if ($("#run")[0].dataset.state === "run") {
+        $("#run")[0].dataset.state = "load";
+        $("#run ~ .run-option").map(el => el.remove())
+      }
     }
   }
 })
@@ -240,15 +247,13 @@ $.queries({
     }
   },
   "#source": {
-    input () {
-      if ($("#run")[0].dataset.state === "run") {
-        $("#run")[0].dataset.state = "load";
-        $("#run ~ .run-option").map(el => el.remove())
-      }
-    }
+    input () { app.emit("reset") }
   },
   "#ui > input[type='radio']": {
-    change (e) { if (e.target.checked) app.emit("selectTT", this.id) }
+    change (e) { if (e.target.checked) {
+      app.emit("selectTT", this.id);
+      app.emit("reset")
+    } }
   }
 })
   </script>
