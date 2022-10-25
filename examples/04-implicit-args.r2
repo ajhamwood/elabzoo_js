@@ -56,11 +56,11 @@ let compExample = comp (cons true) (cons false) nil;
 
 -- nat
 let Nat : U
-    = (N : U) -> (N -> N) -> N -> N;
+    = {N : U} -> (N -> N) -> N -> N;
 let mul : Nat -> Nat -> Nat
-    = \a b N s z. a _ (b _ s) z;
+    = \a b s z. a (b s) z;
 let three : Nat
-    = \N s z. s (s (s z));
+    = \s z. s (s (s z));
 let nine = mul three three;
 
 -- Leibniz equality
@@ -69,7 +69,7 @@ let Eq : {A} -> A -> A -> U
 let refl : {A}{x : A} -> Eq x x
     = \_ px. px;
 
-let sym : {A x y} → Eq {A} x y → Eq y x
-  = λ {A}{x}{y} p. p (λ y. Eq y x) refl;
+let sym : {A x y} -> Eq {A} x y -> Eq y x
+  = \{A}{x}{y} p. p (\y. Eq y x) refl;
 
 the (Eq (mul three three) nine) refl
