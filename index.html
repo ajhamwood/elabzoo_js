@@ -149,6 +149,7 @@ hr {
         <input type="radio" name="tts" id="2"/><label for="2">Dependent types</label>
         <input type="radio" name="tts" id="3"/><label for="3">DT with holes</label>
         <input type="radio" name="tts" id="4" checked/><label for="4">DT with implicit arguments</label>
+        <input type="radio" name="tts" id="5"/><label for="5">DT with unification pruning</label>
       </form>
     </nav>
     <textarea id="source" spellcheck="false"></textarea>
@@ -164,9 +165,9 @@ hr {
   <script src="js/machine.js"></script>
   <script>
 var app = new $.Machine({ S: null, tt: null, ready: null });
-let sourceTextbox = $('#source')[0],
-    logDiv = $('#log')[0],
-    runButton = $('#run')[0],
+let sourceTextbox = $('#source'),
+    logDiv = $('#log'),
+    runButton = $('#run'),
     adjustHeight = () => logDiv.style.height =
       window.innerHeight - 23 - sourceTextbox.offsetHeight + 'px',
     log = (...args) => {
@@ -176,9 +177,9 @@ new MutationObserver(adjustHeight).observe(
   sourceTextbox, { attributes: true, attributeFilter: [ "style" ] });
 $.targets({
   load () {
-    app.emit("selectTT", $("#ui > input[type='radio']:checked")[0].id);
+    app.emit("selectTT", $("#ui > input[type='radio']:checked").id);
     let navClick = { click () {
-          $("main")[0].classList.add("nav-expand");
+          $("main").classList.add("nav-expand");
           $.queries({
             nav: { click: "click" },
             "nav > .arrow": arrowClick
@@ -186,7 +187,7 @@ $.targets({
         } },
         arrowClick = { click (e) {
           e.stopPropagation();
-          $("main")[0].classList.remove("nav-expand");
+          $("main").classList.remove("nav-expand");
           $.queries({
             "nav > .arrow": { click: "click" },
             nav: navClick
@@ -208,12 +209,13 @@ $.targets({
         "01-eval-closures-debruijn",
         "02-typecheck-closures-debruijn",
         "03-holes",
-        "04-implicit-args"
+        "04-implicit-args",
+        "05-pruning"
       ][this.tt - 1]}.r2`).then(res => res.text())
         .then(t => sourceTextbox.innerHTML = t)
     },
     ready (o) {
-      $("#run")[0].dataset.state = "run";
+      $("#run").dataset.state = "run";
       this.ready = o;
       for (let meth in o) {
         let opt = $.load("run-option", "#repl")[0][0];
@@ -229,12 +231,12 @@ $.targets({
     },
     run (fn) {
       fn().catch(e => { log(e.message); "stack" in e ? console.warn(e) : console.warn(e.message) })
-        .then(() => $('#log')[0].scrollTo(0, 1e6))
+        .then(() => $('#log').scrollTo(0, 1e6))
     },
     reset () {
-      if ($("#run")[0].dataset.state === "run") {
-        $("#run")[0].dataset.state = "load";
-        $("#run ~ .run-option").map(el => el.remove())
+      if ($("#run").dataset.state === "run") {
+        $("#run").dataset.state = "load";
+        $.all("#run ~ .run-option").map(el => el.remove())
       }
     }
   }
