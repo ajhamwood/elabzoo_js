@@ -1451,7 +1451,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
                 vrigid ({ vfunc, varg, icit }) { return new this.VRigid(vfunc.lvl, vfunc.spine.concat([ [varg, icit] ])) },
               }, { scrut: [ "vfunc" ] }),
               vAppSp ({ val, spine }) { return spine.reduce((vfunc, [varg, icit]) => this.vApp({ vfunc, varg, icit }), val) },
-              vMeta ({ mvar }) { let e = gctx.metas.get(mvar); return e === null ? new this.VFlex(mvar, []) : e },
+              vMeta ({ mvar }) { let e = gctx.metas.get(mvar); return "term" in e ? new this.VFlex(mvar, []) : e.term },
               vAppPruning ({ env, val, prun }) { return prun.reduce((acc, mbIsImpl, i) => mbIsImpl = null ? acc : this.vApp({ vfunc: acc, varg: env[i], icit: mbIsImpl }), val) },
               
               quote: Evaluator.match({
@@ -1479,7 +1479,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
                         bind: new this.Pi(entry.bind.name, entry.bind.type, acc, false),
                         define: new this.Let(entry.define.name, entry.define.type, entry.define.term, acc),
                       })[Object.keys(entry)[0]], this.quote({ lvl: ctx.lvl, val: vtype })) });
-                gctx.metas.set(m, { type: closed });
+                gctx.metas.set(m, { vtype: closed });
                 return new this.AppPruning(new this.Meta(m), ctx.prun) },
               
               liftPRen ({ occ, dom, cod, ren }) { return { occ, dom: dom + 1, cod: cod + 1, ren: ren.set(cod, dom) } },
@@ -1490,10 +1490,16 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
                     [ dom + 1, domvars, ren.delete(fval.lvl), [null].concat(prun), false ] :
                     [ dom + 1, domvars.add(fval.lvl), ren.set(fval.lvl, dom), [isImpl].concat(prun), isLinear ])(this.force({ val }))),
                 Result.pure([ 0, new Set(), new Map(), [], true ])).then(([ dom, ren ]) => ({ pren: { occ: null, dom, cod: lvl, ren }, mbPrun: isLinear ? prun : null })) },
-              pruneTy ({ revPrun, vtype }) { return revPrun.reduceRight((acc, mbIsImpl) => (fval => mbIsImpl === null ?  // No idea...
-                (pren, val) => acc(this.skipPRen(pren), this.cApp({ cls: val.cls, val: new this.VRigid(pren.cod, []) })) :
-                (pren, val) => new this.Pi(val.name, this.rename({ pren, val: fval }), acc(this.liftPRen(pren), this.cApp({ cls: val.cls, val: new this.VRigid(pren.cod, []) })), fval.isImpl))
-                (this.force({ val: vtype })), (pren, val) => this.rename({ pren, val }))({ occ: null, dom: 0, cod: 0, ren: new Map() }, this.force({ val: vtype })) },
+    
+              pruneTy ({ revPrun, vtype }) { return revPrun.reduceRight((acc, mbIsImpl) => ([pren, val], fval = this.force({ val }),
+                appVal = this.cApp({ env: fval.cls, val: new this.VRigid(pren.cod, []) })) => mbIsImpl === null ? acc([this.skipPRen(pren), appVal]) :
+                  new this.Pi(fval.name, this.rename({ pren, val: fval }), acc([this.liftPRen(pren), appVal]), fval.isImpl), () => [ { occ: null, dom: 0, cod: 0, ren: new Map() }, vtype ])() },
+              pruneMeta ({ prun, mvar }) {
+                const { vtype, term } = gctx.metas.get(mvar);
+                if (term === null) return Result.throw();
+                const newMvar = this.freshMeta({ vtype: this.eval({ env: [], val: this.pruneTy({ revPrun: prun.reverse(), vtype })}) });
+                gctx.metas.set(mvar, { vtype, term: this.eval({ env: [], val: this.lams({ lvl: prun.length, vtype, term: new this.AppPruning(new this.Meta({ mvar: newMvar }), prun) }) }) });
+                return newMvar },
 
               rename: Evaluator.match({
                 vflex: [ { guard: ({ mvar, fval }) => mvar === fval.mvar, clause: () => Result.throw({ message: "Unification error: Occurs check" }) },
@@ -1511,7 +1517,8 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
                       .then(cod => new this.Pi(fval.name, dom, cod, fval.isImpl))) },
                 vu () { return Result.pure(new this.U()) }
               }, { scrut: [ { fval ({ val }) { return this.force({ val }) } } ] }),
-    
+              lams ({ lvl, vtype, term }) { return Array(lvl).fill().reduce((acc, _, i) => ([tm, val], fval = this.force({ val })) =>
+                new this.Lam(fval.name === "_" ? "x" + i : fval.name, acc([tm, this.cApp({ env: fval.cls, val: new this.VRigid(fval.cod, []) })]), fval.isImpl), () => [term, vtype])() },
               solve ({ lvl, mvar, spine, val }) { return this.invertPRen({ lvl, spine })
                 .then(pren => this.rename({ mvar, pren, val })
                   .then(rhs => { gctx.metas.set(mvar,
@@ -1643,7 +1650,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
               elab ({ data: rterm }) {
                 debug.log("Elaborate expression:");
                 return this.doElab({ rterm })
-                  .then(({ term }) => ({ elab: term, metas: Array.from(gctx.metas).map(([mvar, { type: solnTy, term: solnTm }]) =>
+                  .then(({ term }) => ({ elab: term, metas: Array.from(gctx.metas).map(([mvar, { vtype: solnTy, term: solnTm }]) =>
                     new this.MetaEntry(mvar, solnTy, solnTm === null ? solnTm : this.quote({ ctx, lvl: 0, val: solnTm }))).join("\n") })) },
               displayError ({ msg }, err) {
                 let lines = ctx.source.split(/\r\n?|\n/);
