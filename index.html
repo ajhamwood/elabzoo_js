@@ -41,24 +41,25 @@ body {
   color: #eee }
 main {
   display: grid;
-  grid-template-columns: 1.8rem 1fr;
+  grid-template-columns: 15rem 1fr;
   width: 100%;
   grid-gap: 1px }
-main.nav-expand {
-  grid-template-columns: 15rem 1fr }
+main.nav-collapse {
+  grid-template-columns: 1.8rem 1fr }
 nav {
   font-family: 'literata';
   grid-row: 1 / span 2;
-  padding: .4rem }
-main.nav-expand > nav {
+  padding: .4rem;
   display: flex;
   gap: .4rem;
   flex-flow: column nowrap }
-main:not(.nav-expand) > nav { cursor: pointer }
-main:not(.nav-expand) > nav:hover {
+main.nav-collapse > nav {
+  display: block;
+  cursor: pointer }
+main.nav-collapse > nav:hover {
   border: .2rem #555 solid;
   background-color: #222; }
-main:not(.nav-expand) > nav > * { display: none }
+main.nav-collapse > nav > * { display: none }
 nav > .ui-title {
   font-size: large;
   font-weight: bold }
@@ -70,14 +71,14 @@ nav > .arrow {
   left: .7rem;
   top: calc(var(--cursorY) - .7rem);
   user-select: none }
-main:not(.nav-expand) > nav > .arrow::before { content: "→" }
-main.nav-expand > nav > .arrow::before { content: "←" }
-main:not(.nav-expand) > nav:hover > .arrow { display: block }
-main.nav-expand > nav > .arrow {
+main.nav-collapse > nav > .arrow::before { content: "→" }
+main:not(.nav-collapse) > nav > .arrow::before { content: "←" }
+main.nav-collapse > nav:hover > .arrow { display: block }
+main:not(.nav-collapse) > nav > .arrow {
   display: block;
   left: 13.8rem;
   cursor: pointer }
-main.nav-expand > nav > .arrow:hover {
+main:not(.nav-collapse) > nav > .arrow:hover {
   top: calc(var(--cursorY) - .9rem);
   left: 13.6rem;
   border: .2rem #555 solid }
@@ -179,7 +180,7 @@ $.targets({
   load () {
     app.emit("selectTT", $("#ui > input[type='radio']:checked").id);
     let navClick = { click () {
-          $("main").classList.add("nav-expand");
+          $("main").classList.remove("nav-collapse");
           $.queries({
             nav: { click: "click" },
             "nav > .arrow": arrowClick
@@ -187,13 +188,13 @@ $.targets({
         } },
         arrowClick = { click (e) {
           e.stopPropagation();
-          $("main").classList.remove("nav-expand");
+          $("main").classList.add("nav-collapse");
           $.queries({
             "nav > .arrow": { click: "click" },
             nav: navClick
           })
         } };
-    $.queries({ nav: navClick })
+    $.queries({ "nav > .arrow": arrowClick })
   },
   app: {
     selectTT (i) {
