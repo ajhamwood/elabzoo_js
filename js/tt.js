@@ -1493,7 +1493,8 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
     
               pruneTy ({ revPrun, vtype }) { return revPrun.reduceRight((acc, mbIsImpl) => ([pren, val], fval = this.force({ val }),
                 appVal = this.cApp({ env: fval.cls, val: new this.VRigid(pren.cod, []) })) => mbIsImpl === null ? acc([this.skipPRen(pren), appVal]) :
-                  new this.Pi(fval.name, this.rename({ pren, val: fval }), acc([this.liftPRen(pren), appVal]), fval.isImpl), () => [ { occ: null, dom: 0, cod: 0, ren: new Map() }, vtype ])() },
+                  new this.Pi(fval.name, this.rename({ pren, val: fval }), acc([this.liftPRen(pren), appVal]), fval.isImpl), s => s)
+                ([ { occ: null, dom: 0, cod: 0, ren: new Map() }, vtype ]) },
               pruneMeta ({ prun, mvar }) {
                 const { vtype, term } = gctx.metas.get(mvar);
                 if (term === null) return Result.throw();
@@ -1501,6 +1502,19 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
                 gctx.metas.set(mvar, { vtype, term: this.eval({ env: [], val: this.lams({ lvl: prun.length, vtype, term: new this.AppPruning(new this.Meta({ mvar: newMvar }), prun) }) }) });
                 return newMvar },
 
+              OKRenaming: 0,
+              OKNonRenaming: 1,
+              NeedsPruning: 2,
+              pruneVFlex ({ pren, mvar, spine }) {
+                return spine.reduce((acc, [val, icit]) => acc.then(([sp, status], err) => (fval => fval.constructor.name !== "VRigid" || fval.spine.length !== 0 ?
+                  status === this.NeedsPruning ? err({ msg: "Unification error: cannot prune non-variables" }) : this.rename({ pren, val: fval }).then(tm => [ [tm, icit].concat(sp), this.OKNonRenaming ]) :
+                  (mbLvl => (typeof mbLvl === "number") ? Result.pure([ [new this.Var(pren.dom - fval.lvl - 1), icit].concat(sp), status ]) :
+                    status !== this.OKNonRenaming ? Result.pure([[null, icit].concat(sp), this.NeedsPruning]) : err({ msg: "Unification error: cannot prune with a non-renaming" }))(pren.ren.get(fval.lvl)))
+                  (this.force({ val }))), Result.pure([ [], this.OKRenaming ]))
+                  .then(([ sp, status ]) => (status === this.NeedsPruning ? Result.pure(this.pruneMeta({ prun: sp.map(([mbTm, icit]) => mbTm === null ? null : icit), mvar })) :
+                    "term" in gctx.metas.get(mvar) ? Result.pure(mvar) : Result.throw())
+                    .then(mv => sp.reduceRight((acc, [mbTm, icit]) => mbTm === null ? acc : this.App(acc, mbTm, icit), new this.Meta(mv)))) },
+              renameSp ({ pren, term, spine }) { return spine.reduce((acc, [val, icit]) => acc.then(func => this.rename({ val, pren }).then(arg => new this.App(func, arg, icit))), Result.pure(term)) },
               rename: Evaluator.match({
                 vflex: [ { guard: ({ mvar, fval }) => mvar === fval.mvar, clause: () => Result.throw({ message: "Unification error: Occurs check" }) },
                   { guard: () => true, clause ({ mvar, pren, fval }) { return fval.spine.reduce((acc, [val, icit]) => acc.then(accTerm => this.rename({ mvar, pren, val })
@@ -1518,7 +1532,8 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
                 vu () { return Result.pure(new this.U()) }
               }, { scrut: [ { fval ({ val }) { return this.force({ val }) } } ] }),
               lams ({ lvl, vtype, term }) { return Array(lvl).fill().reduce((acc, _, i) => ([tm, val], fval = this.force({ val })) =>
-                new this.Lam(fval.name === "_" ? "x" + i : fval.name, acc([tm, this.cApp({ env: fval.cls, val: new this.VRigid(fval.cod, []) })]), fval.isImpl), () => [term, vtype])() },
+                new this.Lam(fval.name === "_" ? "x" + i : fval.name, acc([tm, this.cApp({ env: fval.cls, val: new this.VRigid(fval.cod, []) })]), fval.isImpl),
+                s => s)([term, vtype]) },
               solve ({ lvl, mvar, spine, val }) { return this.invertPRen({ lvl, spine })
                 .then(pren => this.rename({ mvar, pren, val })
                   .then(rhs => { gctx.metas.set(mvar,
