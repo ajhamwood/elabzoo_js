@@ -727,7 +727,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
               [ dom + 1, ren.set(fval.lvl, dom) ] : err({ msg: "Unification error: occurs check" }))(this.force({ val }))),
             Result.pure([ 0, new Map() ])).then(([ dom, ren ]) => ({ dom, cod: lvl, ren })) },
           rename: Evaluator.match({
-            vflex: [ { guard: ({ mvar, fval }) => mvar === fval.mvar, clause: () => Result.throw({ message: "Unification error" }) },
+            vflex: [ { guard: ({ mvar, fval }) => mvar === fval.mvar, clause: () => Result.throw({ msg: "Unification error" }) },
               { guard: () => true, clause ({ mvar, pren, fval }) { return fval.spine.reduce((acc, val) => acc.then(accTerm => this.rename({ mvar, pren, val })
                 .then(term => new this.App(accTerm, term))), Result.pure(new this.Meta(fval.mvar))) } }],
             vrigid ({ mvar, pren, fval }) { return !pren.ren.has(fval.lvl) ? Result.throw({ msg: "Unification error: variable escapes scope" }) :
@@ -1087,7 +1087,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
               [ dom + 1, ren.set(fval.lvl, dom) ] : err({ msg: "Unification error: Must substitute on unblocked variable" }))(this.force({ val }))),
             Result.pure([ 0, new Map() ])).then(([ dom, ren ]) => ({ dom, cod: lvl, ren })) },
           rename: Evaluator.match({
-            vflex: [ { guard: ({ mvar, fval }) => mvar === fval.mvar, clause: () => Result.throw({ message: "Unification error: Occurs check" }) },
+            vflex: [ { guard: ({ mvar, fval }) => mvar === fval.mvar, clause: () => Result.throw({ msg: "Unification error: Occurs check" }) },
               { guard: () => true, clause ({ mvar, pren, fval }) { return fval.spine.reduce((acc, [val, icit]) => acc.then(accTerm => this.rename({ mvar, pren, val })
                 .then(term => new this.App(accTerm, term, icit))), Result.pure(new this.Meta(fval.mvar))) } } ],
             vrigid ({ mvar, pren, fval }) { return !pren.ren.has(fval.lvl) ? Result.throw({ msg: "Unification error: Variable escapes scope" }) :
@@ -1497,7 +1497,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
                 ([ { occ: null, dom: 0, cod: 0, ren: new Map() }, vtype ]) },
               pruneMeta ({ prun, mvar }) {
                 const { vtype, term } = gctx.metas.get(mvar);
-                if (term === null) return Result.throw();
+                if (typeof term !== "number") return Result.throw();
                 const newMvar = this.freshMeta({ vtype: this.eval({ env: [], val: this.pruneTy({ revPrun: prun.reverse(), vtype })}) });
                 gctx.metas.set(mvar, { vtype, term: this.eval({ env: [], val: this.lams({ lvl: prun.length, vtype, term: new this.AppPruning(new this.Meta({ mvar: newMvar }), prun) }) }) });
                 return newMvar },
@@ -1516,42 +1516,59 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
                     .then(mv => sp.reduceRight((acc, [mbTm, icit]) => mbTm === null ? acc : this.App(acc, mbTm, icit), new this.Meta(mv)))) },
               renameSp ({ pren, term, spine }) { return spine.reduce((acc, [val, icit]) => acc.then(func => this.rename({ val, pren }).then(arg => new this.App(func, arg, icit))), Result.pure(term)) },
               rename: Evaluator.match({
-                vflex: [ { guard: ({ mvar, fval }) => mvar === fval.mvar, clause: () => Result.throw({ message: "Unification error: Occurs check" }) },
-                  { guard: () => true, clause ({ mvar, pren, fval }) { return fval.spine.reduce((acc, [val, icit]) => acc.then(accTerm => this.rename({ mvar, pren, val })
-                    .then(term => new this.App(accTerm, term, icit))), Result.pure(new this.Meta(fval.mvar))) } } ],
-                vrigid ({ mvar, pren, fval }) { return !pren.ren.has(fval.lvl) ? Result.throw({ msg: "Unification error: Variable escapes scope" }) :
-                  fval.spine.reduce((acc, [val, icit]) => acc.then(accTerm => this.rename({ mvar, pren, val })
-                    .then(term => new this.App(accTerm, term, icit))), Result.pure(new this.Var(pren.dom - pren.ren.get(fval.lvl) - 1))) },
-                vlam ({ mvar, pren, fval }) { return this.rename({ mvar, pren: this.liftPRen(pren),
+                vflex ({ pren, fval }) { return pren.occ === fval.mvar ? Result.throw({ msg: "Unification error: Occurs check" }) :
+                  this.pruneVFlex({ pren, mvar: fval.mvar, spine: fval.spine }) },
+                vrigid ({ pren, fval }) { return !pren.ren.has(fval.lvl) ? Result.throw({ msg: "Unification error: Variable escapes scope" }) :
+                  this.renameSp({ pren, spine: fval.spine, term: new this.Var(pren.dom - pren.ren.get(fval.lvl) - 1) }) },
+                vlam ({ pren, fval }) { return this.rename({ pren: this.liftPRen(pren),
                   val: this.cApp({ cls: fval.cls, val: new this.VRigid(pren.cod, []) }) })
                   .then(body => new this.Lam(fval.name, body, fval.isImpl)) },
-                vpi ({ mvar, pren, fval }) { return this.rename({ mvar, pren, val: fval.dom })
-                    .then(dom => this.rename({ mvar, pren: this.liftPRen(pren),
-                      val: this.cApp({ cls: fval.cls, val: new this.VRigid(pren.cod, []) }) })
-                      .then(cod => new this.Pi(fval.name, dom, cod, fval.isImpl))) },
+                vpi ({ pren, fval }) { return this.rename({ pren, val: fval.dom })
+                .then(dom => this.rename({ pren: this.liftPRen(pren),
+                  val: this.cApp({ cls: fval.cls, val: new this.VRigid(pren.cod, []) }) })
+                  .then(cod => new this.Pi(fval.name, dom, cod, fval.isImpl))) },
                 vu () { return Result.pure(new this.U()) }
               }, { scrut: [ { fval ({ val }) { return this.force({ val }) } } ] }),
               lams ({ lvl, vtype, term }) { return Array(lvl).fill().reduce((acc, _, i) => ([tm, val], fval = this.force({ val })) =>
                 new this.Lam(fval.name === "_" ? "x" + i : fval.name, acc([tm, this.cApp({ env: fval.cls, val: new this.VRigid(fval.cod, []) })]), fval.isImpl),
                 s => s)([term, vtype]) },
               solve ({ lvl, mvar, spine, val }) { return this.invertPRen({ lvl, spine })
-                .then(pren => this.rename({ mvar, pren, val })
-                  .then(rhs => { gctx.metas.set(mvar,
-                    this.eval({ term: (tm => { for (let i = 0; i < spine.length; i++)
-                      tm = new this.Lam(`x${i}`, tm, spine[i][1]); return tm })(rhs), env: [] })) })) },
+                .then(({ pren, mbPrun }) => this.solveWithPRen({ mvar, pren, mbPrun, val })) },
+              solveWithPRen ({ mvar, pren, mbPrun, val }) {
+                const { term, vtype } = gctx.metas.get(mvar);
+                return (typeof term === "number" ? Result.throw() : mbPrun === null ? Result.pure() :
+                  this.pruneTy({ revPrun: mbPrun.reverse(), vtype })).then(() => this.rename({ pren: Object.assign(pren, { occ: mvar }), val }))
+                  .then(rhs => gctx.metas.set(mvar, { vtype, term: this.eval({ env: [], val: this.lams({ lvl: pren.dom, vtype, term: rhs }) }) })) },
+
+              flexFlex ({ lvl, mvar0, spine0, mvar1, spine1 }) {
+                if (spine0.length < spine1.length) [ mvar0, spine0, mvar1, spine1 ] = [ mvar1, spine1, mvar0, spine0 ];
+                return this.invertPRen({ lvl, spine: spine0 })
+                  .then(({ pren, mbPrun }) => this.solveWithPRen({ mvar: mvar0, pren, mbPrun, val: new this.VFlex({ mvar: mvar1, spine: spine1 }) }))
+                  .catch(() => this.solve({ lvl, mvar: mvar1, spine: spine1, val: new this.VFlex({ mvar: mvar0, spine: spine0 }) })) },
+
+              intersect ({ lvl, mvar, spine0, spine1 }) {
+                if (spine0.length !== spine1.length) return Result.throw();
+                else return Result.pure(spine0.reduce((acc, [val0, icit0], i) => {
+                  const [ val1 ] = spine1[i];
+                  return ((fval0, fval1) => fval0.constructor.name !== "VRigid" || fval0.spine.length !== 0 || fval1.constructor.name !== "VRigid" || fval1.spine.length !== 0 || acc === null ? null :
+                    [ fval0.lvl === fval1.lvl ? icit0 : null ].concat(acc))
+                  (this.force({ val: val0 }), this.force({ val: val1 }))
+                }, [])).then(mbPrun => mbPrun === null ? this.unifySp({ lvl, spine0, spine1 }) : mbPrun.includes(null) ? this.pruneMeta({ prun: mbPrun, mvar }).then(() => {}) : undefined) },
+
               unify: Evaluator.match({
+                "vu vu" () { return Result.pure() },
+                "vpi vpi" ({ lvl, fval0, fval1 }) { return fval0.isImpl !== fval1.isImpl ? Result.throw({ msg: "Unification error: Rigid mismatch" }) :
+                  this.unify({ lvl, val0: fval0.dom, val1: fval1.dom }).then(() => this.unify({ lvl: lvl + 1,
+                    val0: this.cApp({ cls: fval0.cls, val: new this.VRigid(lvl, []) }), val1: this.cApp({ cls: fval1.cls, val: new this.VRigid(lvl, []) }) })) },
+                "vrigid vrigid": [ { guard ({ fval0, fval1 }) { return fval0.lvl === fval1.lvl },
+                  clause ({ lvl, fval0, fval1 }) { return this.unifySp({ lvl, spine0: fval0.spine, spine1: fval1.spine }) } } ],
+                "vflex vflex": [ { guard ({ fval0, fval1 }) { return fval0.mvar === fval1.mvar },
+                  clause ({ lvl, fval0, fval1 }) { return this.intersect({ lvl, mvar: fval0.mvar, spine0: fval0.spine, spine1: fval1.spine }) } },
+                  { guard () { return true }, clause ({ lvl, fval0, fval1 }) { return this.flexFlex({ lvl, mvar0: fval0.mvar, spine0: fval0.spine, mvar1: fval1.mvar, spine1: fval1.spine }) } } ],
                 "vlam vlam" ({ lvl, fval0, fval1 }) { return this.unify({ lvl: lvl + 1,
                   val0: this.cApp({ cls: fval0.cls, val: new this.VRigid(lvl, []) }), val1: this.cApp({ cls: fval1.cls, val: new this.VRigid(lvl, []) }) }) },
                 "vlam _" ({ lvl, fval0, fval1 }) { return this.unify({ lvl: lvl + 1, val0: this.cApp({ cls: fval0.cls, val: new this.VRigid(lvl, []) }),
                     val1: this.vApp({ vfunc: fval1, varg: new this.VRigid(lvl, []), icit: fval0.isImpl }) }) },
-                "vpi vpi" ({ lvl, fval0, fval1 }) { return fval0.isImpl !== fval1.isImpl ? Result.throw({ msg: "Unification error: Rigid mismatch" }) :
-                  this.unify({ lvl, val0: fval0.dom, val1: fval1.dom }).then(() => this.unify({ lvl: lvl + 1,
-                    val0: this.cApp({ cls: fval0.cls, val: new this.VRigid(lvl, []) }), val1: this.cApp({ cls: fval1.cls, val: new this.VRigid(lvl, []) }) })) },
-                "vu vu" () { return Result.pure() },
-                "vrigid vrigid": [ { guard ({ fval0, fval1 }) { return fval0.lvl === fval1.lvl },
-                  clause ({ lvl, fval0, fval1 }) { return this.unifySp({ lvl, sp0: fval0.spine, sp1: fval1.spine }) } } ],
-                "vflex vflex": [ { guard ({ fval0, fval1 }) { return fval0.mvar === fval1.mvar },
-                  clause ({ lvl, fval0, fval1 }) { return this.unifySp({ lvl, sp0: fval0.spine, sp1: fval1.spine }) } } ],
                 "vflex _": [ { guard ({ fval1 }) { return fval1.constructor.name !== "VLam" },
                   clause ({ lvl, fval0, fval1 }) { return this.solve({ lvl, mvar: fval0.mvar, spine: fval0.spine, val: fval1 }) } } ],
                 "_" ({ lvl, fval0, fval1 }) { return fval1.constructor.name === "VLam" ? this.unify({ lvl: lvl + 1,
@@ -1559,8 +1576,8 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
                   fval1.constructor.name === "VFlex" ? this.solve({ lvl, mvar: fval1.mvar, spine: fval1.spine, val: fval0 }) :
                     Result.throw({ msg: "Unification error: Rigid mismatch" }) }
               }, { scrut: [ { fval0 ({ val0 }) { return this.force({ val: val0 }) } }, { fval1 ({ val1 }) { return this.force({ val: val1 }) } } ] }),
-              unifySp ({ lvl, sp0, sp1 }) { if (sp0.length !== sp1.length) return Result.throw({ msg: "Unification error: Rigid mismatch" })
-                else return sp0.reduce((acc, [val0], i) => acc.then(() => this.unify({ lvl, val0, val1: sp1[i][0] })), Result.pure()) },
+              unifySp ({ lvl, spine0, spine1 }) { if (spine0.length !== spine1.length) return Result.throw({ msg: "Unification error: Rigid mismatch" })
+                else return spine0.reduce((acc, [val0], i) => acc.then(() => this.unify({ lvl, val0, val1: spine1[i][0] })), Result.pure()) },
     
               bind ({ name, vtype, isNewBinder = false }) { return { ...ctx,
                 env: ctx.env.concat([ new this.VRigid(ctx.lvl, []) ]),
