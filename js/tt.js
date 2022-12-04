@@ -1257,7 +1257,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
               local: { env: [], names: new Map(), path: [], prun: [], lvl: 0 },
               global: { metas: new Map(), pos: [], source: "" } },
     
-            astData: ({ local: ctx }) => ({  // TODO: ctx.types => ctx.names
+            astData: ({ local: ctx }) => ({  // Correctly printed terms in debug is a non-feature!
               RVar: [ [ "name", "pos" ], { toString () { return `RVar ${this.name}` } } ],
               RLam: [ [ "name", "nameIcit", "body", "pos" ], { toString () {  // nameIcit := name:string | isImpl:boolean
                 return `RLam ${({ boolean: this.nameIcit ? `{${this.name}}` : this.name,
@@ -1282,7 +1282,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
                   let name = this.fresh(names, this.name),
                       goLam = (name, body) => {
                         let keepCtx = { ...ctx, env: [...ctx.env] };
-                        if (name) names.push([name]);
+                        names.push(name);
                         let res = (name => body.constructor.name !== "Lam" ? `. ${body.toString(names, 0)}` :
                               ` ${body.isImpl ? `{${name}}` : name}${goLam(name, body.body)}`)(this.fresh(names, body.name));
                         Object.assign(ctx, keepCtx);
@@ -1296,21 +1296,21 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
                       piBind = (name, dom, isImpl) => (body => isImpl ? `{${body}}` : `(${body})`)(name + " : " + dom.toString(names, 0)),
                       goPi = (name, cod) => {
                         let keepCtx = { ...ctx, env: [...ctx.env] };
-                        if (name) names.push([name]);
+                        names.push(name);
                         let res = cod.constructor.name !== "Pi" ? ` → ${cod.toString(names, 1)}` :
                               cod.name !== "_" ? (name => piBind(name, cod.dom, cod.isImpl) + goPi(name, cod.cod))(this.fresh(names, cod.name)) :
-                                ` → ${cod.dom.toString(names, 2)} → ${names.push("_"), cod.cod.toString(names, 1)}`;
+                                ` → ${cod.dom.toString(names, 2)} → ${cod.cod.toString(names.concat(["_"]), 1)}`;
                         Object.assign(ctx, keepCtx);
                         return res
                       };
                   return (str => prec > 1 ? `(${str})` : str)
-                    (name === "_" ? `${this.dom.toString(names, 2)} → ${names.push("_"), this.cod.toString(names, 1)}` :
+                    (name === "_" ? `${this.dom.toString(names, 2)} → ${this.cod.toString(names.concat(["_"]), 1)}` :
                       piBind(name, this.dom, this.isImpl) + goPi(name, this.cod)) } } ],
               U: [ [], { toString () { return "U" } } ],
               Let: [ [ "name", "type", "term", "next" ], {
                 fresh (names, name) { return name === "_" ? "_" : names.reduce((acc, n) => new RegExp(`^${acc}[']*$`).test(n) ? n + "'" : acc, name) },
                 toString (names = AST.names(ctx), prec = 0) { let name = this.fresh(names, this.name); return (str => prec > 0 ? `(${str})` : str)
-                  (`let ${name} : ${this.type.toString(names, 0)}\n    = ${this.term.toString(names, 0)};\n${names.push(name), this.next.toString(names, 0)}`) } } ],
+                  (`let ${name} : ${this.type.toString(names, 0)}\n    = ${this.term.toString(names, 0)};\n${this.next.toString(names.concat(["_"]), 0)}`) } } ],
               Meta: [ [ "mvar" ], { toString () { return `?${this.mvar}` } } ],
               AppPruning: [ [ "term", "prun" ], { toString (names = AST.names(ctx), prec) { return (str => prec > 2 ? `(${str})` : str)
                 (this.prun.reduce((str, mbIsImpl, i) => {
@@ -1474,7 +1474,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
               }))(0),
               freshMeta ({ vtype }) {
                 const m = this.nextMetaVar(),
-                      closed = this.eval({ env: [], term: ctx.path.reduce((acc, entry) => ({
+                      closed = this.eval({ env: [], term: ctx.path.reduceRight((acc, entry) => ({
                         bind: () => new this.Pi(entry.bind.name, entry.bind.type, acc, false),
                         define: () => new this.Let(entry.define.name, entry.define.type, entry.define.term, acc),
                       })[Object.keys(entry)[0]](), this.quote({ lvl: ctx.lvl, val: vtype })) });
@@ -1486,8 +1486,8 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
               invertPRen ({ lvl, spine }) { return spine.reduce((acc, [val, isImpl]) => acc.then(([ dom, domvars, ren, prun, isLinear ], err) =>
                 (fval => fval.constructor.name !== "VRigid" || fval.spine.length !== 0 ?
                   err({ msg: "Unification error: Must substitute on unblocked variable" }) : domvars.has(fval.lvl) ?
-                    [ dom + 1, domvars, ren.delete(fval.lvl), [null].concat(prun), false ] :
-                    [ dom + 1, domvars.add(fval.lvl), ren.set(fval.lvl, dom), [isImpl].concat(prun), isLinear ])(this.force({ val }))),
+                    [ dom + 1, domvars, ren.delete(fval.lvl), prun.concat([null]), false ] :
+                    [ dom + 1, domvars.add(fval.lvl), ren.set(fval.lvl, dom), prun.concat([isImpl]), isLinear ])(this.force({ val }))),
                 Result.pure([ 0, new Set(), new Map(), [], true ])).then(([ dom, ren ]) => ({ pren: { occ: null, dom, cod: lvl, ren }, mbPrun: isLinear ? prun : null })) },
     
               pruneTy ({ revPrun, vtype }) { return revPrun.reduceRight((acc, mbIsImpl) => ([pren, val], fval = this.force({ val }),
@@ -1507,8 +1507,8 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
               pruneVFlex ({ pren, mvar, spine }) {
                 return spine.reduce((acc, [val, icit]) => acc.then(([sp, status], err) => (fval => fval.constructor.name !== "VRigid" || fval.spine.length !== 0 ?
                   status === this.NeedsPruning ? err({ msg: "Unification error: cannot prune non-variables" }) : this.rename({ pren, val: fval }).then(tm => [ [tm, icit].concat(sp), this.OKNonRenaming ]) :
-                  (mbLvl => (typeof mbLvl === "number") ? Result.pure([ [new this.Var(pren.dom - fval.lvl - 1), icit].concat(sp), status ]) :
-                    status !== this.OKNonRenaming ? Result.pure([[null, icit].concat(sp), this.NeedsPruning]) : err({ msg: "Unification error: cannot prune with a non-renaming" }))(pren.ren.get(fval.lvl)))
+                  (mbLvl => (typeof mbLvl === "number") ? Result.pure([ sp.concat([new this.Var(pren.dom - fval.lvl - 1), icit]), status ]) :
+                    status !== this.OKNonRenaming ? Result.pure([sp.concat([null, icit]), this.NeedsPruning]) : err({ msg: "Unification error: cannot prune with a non-renaming" }))(pren.ren.get(fval.lvl)))
                   (this.force({ val }))), Result.pure([ [], this.OKRenaming ]))
                   .then(([ sp, status ]) => (status === this.NeedsPruning ? Result.pure(this.pruneMeta({ prun: sp.map(([mbTm, icit]) => mbTm === null ? null : icit), mvar })) :
                     "val" in gctx.metas.get(mvar) ? Result.pure(mvar) : Result.throw())
@@ -1550,7 +1550,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
                 else return Result.pure(spine0.reduce((acc, [val0, icit0], i) => {
                   const [ val1 ] = spine1[i];
                   return ((fval0, fval1) => fval0.constructor.name !== "VRigid" || fval0.spine.length !== 0 || fval1.constructor.name !== "VRigid" || fval1.spine.length !== 0 || acc === null ? null :
-                    [ fval0.lvl === fval1.lvl ? icit0 : null ].concat(acc))
+                    acc.concat([ fval0.lvl === fval1.lvl ? icit0 : null ]))
                   (this.force({ val: val0 }), this.force({ val: val1 }))
                 }, [])).then(mbPrun => mbPrun === null ? this.unifySp({ lvl, spine0, spine1 }) : mbPrun.includes(null) ? this.pruneMeta({ prun: mbPrun, mvar }).then(() => {}) : undefined) },
 
@@ -1567,7 +1567,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
                 "vlam vlam" ({ lvl, fval0, fval1 }) { return this.unify({ lvl: lvl + 1,
                   val0: this.cApp({ cls: fval0.cls, val: new this.VRigid(lvl, []) }), val1: this.cApp({ cls: fval1.cls, val: new this.VRigid(lvl, []) }) }) },
                 "vlam _" ({ lvl, fval0, fval1 }) { return this.unify({ lvl: lvl + 1, val0: this.cApp({ cls: fval0.cls, val: new this.VRigid(lvl, []) }),
-                    val1: this.vApp({ vfunc: fval1, varg: new this.VRigid(lvl, []), icit: fval0.isImpl }) }) },
+                  val1: this.vApp({ vfunc: fval1, varg: new this.VRigid(lvl, []), icit: fval0.isImpl }) }) },
                 "vflex _": [ { guard: ({ fval1 }) => fval1.constructor.name !== "VLam",
                   clause ({ lvl, fval0, fval1 }) { return this.solve({ lvl, mvar: fval0.mvar, spine: fval0.spine, val: fval1 }) } } ],
                 _ ({ lvl, fval0, fval1 }) { return fval1.constructor.name === "VLam" ? this.unify({ lvl: lvl + 1,
@@ -1581,13 +1581,13 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
               bind ({ name, vtype }) { console.log("in bind", name, vtype); return { ...ctx,
                 env: ctx.env.concat([ new this.VRigid(ctx.lvl, []) ]),
                 names: new Map(ctx.names).set(name, [ ctx.lvl, vtype ]),
-                lvl: ctx.lvl + 1, prun: [ false ].concat(ctx.prun),
-                path: [{ bind: { name, type: this.quote({ lvl: ctx.lvl, val: vtype }) } }].concat(ctx.path) } },
+                lvl: ctx.lvl + 1, prun: ctx.prun.concat([false]),
+                path: ctx.path.concat([{ bind: { name, type: this.quote({ lvl: ctx.lvl, val: vtype }) } }]) } },
               define ({ name, term, val, type, vtype }) { return { ...ctx,
                 env: ctx.env.concat([ val ]),
                 names: new Map(ctx.names).set(name, [ ctx.lvl, vtype ]),
-                lvl: ctx.lvl + 1, prun: [ null ].concat(ctx.prun),
-                path: [{ define: { name, type, term } }].concat(ctx.path) } },
+                lvl: ctx.lvl + 1, prun: ctx.prun.concat([null]),
+                path: ctx.path.concat([{ define: { name, type, term } }]) } },
               closeVal ({ val }) { return { term: this.quote({ val, lvl: ctx.lvl + 1 }), env: ctx.env } },
     
               unifyCatch ({ val0, val1 }) { return this.unify({ lvl: ctx.lvl, val0, val1 }).catch((e, err) => e.msg.slice(0, 17) !== "Unification error" ? err(e) :
