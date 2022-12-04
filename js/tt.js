@@ -22,7 +22,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
 
   class AST {
     static tag = class AST {};
-    static names (ctx) { let names = []; ctx.path.forEach(({ name }) => names.push(name)); return names }
+    static names (ctx) { let names = []; ctx.path.forEach(({ bind, define }) => names.push((bind ?? define).name)); return names }
     constructor (nodes, wc) {
       for (let node in nodes) this[node] = (([props, meths = {}]) => ({ [node]: class extends AST.tag {
         constructor (...args) { super();
@@ -111,14 +111,15 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
         })[sw[k].constructor.name](sw[k])
       }
       return function (obj = {}) {
-        let branch = tree, _ = [], match, run = f => f.apply(this, [obj]);
+        let branch = tree, _ = [], run = f => f.apply(this, [obj]), s = [];
         decorate(obj);
-        scrutList: for (let argName of scrut) {
-          if (typeof argName !== "string") {
-            let [[ procArgName, fn ]] = Object.entries(argName);
-            obj[procArgName] = match = run(fn);
-          } else match = obj[argName];
-          let name = (n => n in branch ? n : "_")(match.constructor.name.toLowerCase());
+        for (let argName of scrut) if (typeof argName !== "string") {
+          let [[ procArgName, fn ]] = Object.entries(argName);
+          obj[procArgName] = run(fn);
+          s.push(procArgName)
+        } else s.push(argName);
+        scrutList: for (let argName of s) {
+          let name = (n => n in branch ? n : "_")(obj[argName].constructor.name.toLowerCase());
           if (name in branch) {
             inf: while (true) {
               let update = b => b[name];
@@ -156,10 +157,10 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
         fns[k] = Object.assign((f => ({ [k]: function () {
           let { local: { source, phase, ...local } = {}, global = {} } = ctx,
               clone = (o = {}) => Object.fromEntries(Object.entries(o).map(([k, v]) => ([k, v instanceof Array ? [...v] :
-                [Map, Set, WeakMap, WeakSet].some(kl => kl === v.constructor) ? new v.constructor([...v.entries()]) : v])));
+                [Map, Set, WeakMap, WeakSet].includes(v.constructor) ? new v.constructor([...v.entries()]) : v])));
           debug.group(k, "|", ...Object.entries(arguments[0] ?? {}).flatMap(([k, v], i, ar) => [`${k}:`,
             ...(AST.tag.isPrototypeOf(v?.constructor) ? [`${v}`, v] : [v]), ...(i === ar.length - 1 ? [] : [","])]),
-              "| arg:", arguments[0], ", locals:", clone(local), ", globals:", clone(global));
+              "| arg:", arguments[0] ?? "none", ", locals:", clone(local), ", globals:", (({ source, ...o }) => o)(clone(global)));
           let res = f.apply({ ...fns, ...ast }, arguments);
           debug.groupEnd();
           return res
@@ -178,7 +179,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
             let keepLocalCtx = clone(contextData.local);
             Object.assign(contextData.local, newLocalCtx);
             let res = cb(fnf().apply(clf(), args));
-            contextData.local = keepLocalCtx;
+            Object.assign(contextData.local, keepLocalCtx);
             return res },
           keepGlobalCtx = clone(contextData.global),
           ast = new AST(optCtx(astData, contextData), withContext),
@@ -782,20 +783,20 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
           unifyCatch ({ val0, val1 }) { return this.unify({ lvl: ctx.lvl, val0, val1 }).catch((e, err) => e.msg.slice(0, 17) !== "Unification error" ? err(e) :
             err({ msg: `${e.msg}\nCan't unify\n    ${this.quote({ lvl: ctx.lvl, val: val0 })}\nwith\n    ${this.quote({ lvl: ctx.lvl, val: val1 })}\n` })) },
           check: Evaluator.match({
-            "rlam vpi" ({ rterm, vtype }) { return this.check.withContext(this.bind({ name: rterm.name, vtype: vtype.dom }),
-              [ { rterm: rterm.body, vtype: this.cApp({ cls: vtype.cls, val: new this.VRigid(ctx.lvl, []) }) } ])
+            "rlam vpi" ({ rterm, fvtype }) { return this.check.withContext(this.bind({ name: rterm.name, vtype: fvtype.dom }),
+              [ { rterm: rterm.body, vtype: this.cApp({ cls: fvtype.cls, val: new this.VRigid(ctx.lvl, []) }) } ])
                 .then(body => new this.Lam(rterm.name, body)) },
-            "rlet _" ({ rterm, vtype }) { return this.check({ rterm: rterm.type, vtype: new this.VU() })
+            "rlet _" ({ rterm, fvtype }) { return this.check({ rterm: rterm.type, vtype: new this.VU() })
               .then(type => {
                 let cvtype = this.eval({ term: type, env: ctx.env });
                 return this.check({ rterm: rterm.term, vtype: cvtype })
                   .then(term => this.check.withContext(define({ name: term.name, val: this.eval({ term, env: ctx.env }), vtype: cvtype }),
-                    [ { rterm: rterm.next, vtype } ])
+                    [ { rterm: rterm.next, vtype: fvtype } ])
                   .then(next => this.Let(rterm.name, type, term, next))) }) },
             "rhole _" () { return Result.pure(this.freshMeta()) },
-            _ ({ rterm, vtype }) { return this.infer({ rterm })
-              .then(({ term, vtype: ivtype }) => this.unifyCatch({ lvl: ctx.lvl, val0: vtype, val1: ivtype }).then(() => term)) }
-          }, { decorate: ({ rterm }) => gctx.pos = rterm.pos, scrut: [ "rterm", "vtype" ] }),
+            _ ({ rterm, fvtype }) { return this.infer({ rterm })
+              .then(({ term, vtype: ivtype }) => this.unifyCatch({ lvl: ctx.lvl, val0: fvtype, val1: ivtype }).then(() => term)) }
+          }, { decorate: ({ rterm }) => gctx.pos = rterm.pos, scrut: [ "rterm", { fvtype ({ vtype }) { return this.force({ val: vtype }) } } ] }),
           infer: Evaluator.match({
             rvar ({ rterm }) { return (ix => ~ix ? Result.pure({ term: new this.Var(ctx.lvl - ix - 1), vtype: ctx.types[ix][1] }) :
               Result.throw({ msg: `Evaluator error: Name not in scope "${rterm.name}"` }))(ctx.types.findLastIndex(([n]) => n === rterm.name)) },
@@ -843,7 +844,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
               .then(({ term }) => ({ elab: term, metas: Array.from(gctx.metas).map(([mvar, soln]) =>
                 new this.MetaEntry(mvar, soln === null ? soln : this.quote({ ctx, lvl: 0, val: soln }))).join("\n") })) },
           displayError ({ msg }, err) {
-            let lines = ctx.source.split(/\r\n?|\n/);
+            let lines = gctx.source.split(/\r\n?|\n/);
             return err({ message: `${msg}\n${lines[gctx.pos[0][0] - 1]}\n${"-".repeat(gctx.pos[0][1] - 1)}${
               "^".repeat(gctx.pos[1][1] - gctx.pos[0][1])} ${gctx.pos.join("-")}` }) }
         }), "nf", "type", "elab" ]
@@ -1160,27 +1161,27 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
           }, { scrut: [ { fvtype ({ vtype }) { return this.force({ val: vtype }) } } ] }),
           check: Evaluator.match({
             "rlam vpi": [ {
-              guard ({ rterm, vtype }) { return rterm.nameIcit === vtype.isImpl || rterm.nameIcit === vtype.name && vtype.isImpl },
-              clause ({ rterm, vtype }) { return this.check.withContext(this.bind({ name: rterm.name, vtype: vtype.dom }),
-                [ { rterm: rterm.body, vtype: this.cApp.withContext(this.bind({ name: rterm.name, vtype: vtype.dom }),
-                  [ { cls: vtype.cls, val: new this.VRigid(ctx.lvl, []) } ]) } ])
-                .then(body => new this.Lam(rterm.name, body, vtype.isImpl)) } } ],
-            "rlet _": [ { guard: ({ vtype }) => vtype.constructor.name !== "VPi",
-              clause ({ rterm, vtype }) { return this.check({ rterm: rterm.type, vtype: new this.VU() }).then(type => {
+              guard ({ rterm, fvtype }) { return rterm.nameIcit === fvtype.isImpl || rterm.nameIcit === fvtype.name && fvtype.isImpl },
+              clause ({ rterm, fvtype }) { return this.check.withContext(this.bind({ name: rterm.name, vtype: fvtype.dom }),
+                [ { rterm: rterm.body, vtype: this.cApp.withContext(this.bind({ name: rterm.name, vtype: fvtype.dom }),
+                  [ { cls: fvtype.cls, val: new this.VRigid(ctx.lvl, []) } ]) } ])
+                .then(body => new this.Lam(rterm.name, body, fvtype.isImpl)) } } ],
+            "rlet _": [ { guard: ({ fvtype }) => fvtype.constructor.name !== "VPi",
+              clause ({ rterm, fvtype }) { return this.check({ rterm: rterm.type, vtype: new this.VU() }).then(type => {
                 let cvtype = this.eval({ term: type, env: ctx.env });
                 return this.check({ rterm: rterm.term, vtype: cvtype })
                   .then(term => this.check.withContext(define({ name: term.name, val: this.eval({ term, env: ctx.env }), vtype: cvtype }),
-                    [ { rterm: rterm.next, vtype } ])
+                    [ { rterm: rterm.next, fvtype } ])
                   .then(next => this.Let(rterm.name, type, term, next))) }) } } ],
-            "rhole _": [ { guard: ({ vtype }) => vtype.constructor.name !== "VPi", clause () { return Result.pure(this.freshMeta()) } } ],
-            _: [ { guard: ({ vtype }) => vtype.constructor.name === "VPi" && vtype.isImpl,
-              clause ({ rterm, vtype }) { return this.check.withContext(this.bind({ name: vtype.name, vtype: vtype.dom, isNewBinder: true }),
-                [ { rterm, vtype: this.cApp.withContext(this.bind({ name: vtype.name, vtype: vtype.dom }),
-                  [ { cls: vtype.cls, val: new this.VRigid(ctx.lvl, []) } ]) } ], res => res
-                    .then(body => new this.Lam(vtype.name, body, true))) } },
-              { guard: () => true, clause ({ rterm, vtype }) { return this.infer({ rterm }).then(({ term, vtype }) => this.insertNeutral({ term, vtype }))
-                .then(({ term, vtype: ivtype }) => this.unifyCatch({ lvl: ctx.lvl, val0: vtype, val1: ivtype }).then(() => term)) } } ]
-          }, { decorate: ({ rterm }) => gctx.pos = rterm.pos, scrut: [ "rterm", "vtype" ] }),
+            "rhole _": [ { guard: ({ fvtype }) => fvtype.constructor.name !== "VPi", clause () { return Result.pure(this.freshMeta()) } } ],
+            _: [ { guard: ({ fvtype }) => fvtype.constructor.name === "VPi" && fvtype.isImpl,
+              clause ({ rterm, fvtype }) { return this.check.withContext(this.bind({ name: fvtype.name, vtype: fvtype.dom, isNewBinder: true }),
+                [ { rterm, vtype: this.cApp.withContext(this.bind({ name: fvtype.name, vtype: fvtype.dom }),
+                  [ { cls: fvtype.cls, val: new this.VRigid(ctx.lvl, []) } ]) } ], res => res
+                    .then(body => new this.Lam(fvtype.name, body, true))) } },
+              { guard: () => true, clause ({ rterm, fvtype }) { return this.infer({ rterm }).then(({ term, vtype }) => this.insertNeutral({ term, vtype }))
+                .then(({ term, vtype: ivtype }) => this.unifyCatch({ lvl: ctx.lvl, val0: fvtype, val1: ivtype }).then(() => term)) } } ]
+          }, { decorate: ({ rterm }) => gctx.pos = rterm.pos, scrut: [ "rterm", { fvtype ({ vtype }) { return this.force({ val: vtype }) } } ] }),
           infer: Evaluator.match({
             rvar ({ rterm }) { return (ix => ~ix ? Result.pure({ term: new this.Var(ctx.lvl - ix - 1), vtype: ctx.types[ix][1] }) :
               Result.throw({ msg: `Elaboration error: Name not in scope "${rterm.name}"` }))
@@ -1235,14 +1236,14 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
               .then(({ term }) => ({ elab: term, metas: Array.from(gctx.metas).map(([mvar, soln]) =>
                 new this.MetaEntry(mvar, soln === null ? soln : this.quote({ ctx, lvl: 0, val: soln }))).join("\n") })) },
           displayError ({ msg }, err) {
-            let lines = ctx.source.split(/\r\n?|\n/);
+            let lines = gctx.source.split(/\r\n?|\n/);
             return err({ message: `${msg}\n${lines[gctx.pos[0][0] - 1]}\n${"-".repeat(gctx.pos[0][1] - 1)}${
               "^".repeat(gctx.pos[1][1] - gctx.pos[0][1])} ${gctx.pos.join("-")}` }) }
         }), "nf", "type", "elab" ],
       });
 
       let dtpr = new Context({
-            debugHandler: p => ({}, prop) => p !== true && p !== dtimp.phase ? () => {} :
+            debugHandler: p => ({}, prop) => p !== true && p !== dtpr.phase ? () => {} :
               prop === "log" ? (v, ...rest) => {
                 let declutter = v => { if (v?.hasOwnProperty("source")) { let { source, ...o } = v; return [o] } else return [v] };
                 console.log(...(typeof v === "string" ? [v] : declutter(v)), ...rest.flatMap(declutter)
@@ -1250,7 +1251,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
                     ...Object.entries(o).flatMap(([k, v], i, ar) => [`${k}:`,
                       ...(typeof v === "string" ? [`\`${v}\``] : AST.tag.isPrototypeOf(v?.constructor) ? [`${v}`, v] : [v]), ...(i === ar.length - 1 ? [] : [","])]), "}"]),
                   (stack => { try { throw new Error('') } catch (e) { stack = e.stack || "" }
-                    return stack.split(`\n`)[5].replace(/@.*(js)/g, "") })()) } : console[prop],
+                    return stack.split(`\n`)[6].replace(/@.*(js)/g, "") })()) } : console[prop],
             
             contextData: {
               local: { env: [], names: new Map(), path: [], prun: [], lvl: 0 },
@@ -1276,28 +1277,28 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
               App: [ [ "func", "arg", "isImpl" ], { toString (names = AST.names(ctx), prec = 0) { return (str => prec > 2 ? `(${str})` : str)
                 (`${this.func.toString(names, 2)} ${(arg => this.isImpl ? `{${arg.toString(names, 0)}}` : arg.toString(names, 3))(this.arg)}`) } } ],
               Lam: [ [ "name", "body", "isImpl" ], {
-                fresh (names = AST.names(ctx), name) { return name === "_" ? "_" : names.reduce((acc, n) => new RegExp(`^${acc}[']*$`).test(n) ? n + "'" : acc, name) },
+                fresh (names, name) { return name === "_" ? "_" : names.reduce((acc, n) => new RegExp(`^${acc}[']*$`).test(n) ? n + "'" : acc, name) },
                 toString (names = AST.names(ctx), prec = 0) {
-                  let name = this.fresh(this.name),
+                  let name = this.fresh(names, this.name),
                       goLam = (name, body) => {
                         let keepCtx = { ...ctx, env: [...ctx.env] };
                         if (name) names.push([name]);
                         let res = (name => body.constructor.name !== "Lam" ? `. ${body.toString(names, 0)}` :
-                              ` ${body.isImpl ? `{${name}}` : name}${goLam(name, body.body)}`)(this.fresh(body.name));
+                              ` ${body.isImpl ? `{${name}}` : name}${goLam(name, body.body)}`)(this.fresh(names, body.name));
                         Object.assign(ctx, keepCtx);
                         return res
                       };
                   return (str => prec > 0 ? `(${str})` : str)(`λ ${this.isImpl ? `{${name}}` : name}${goLam(name, this.body)}`) } } ],
               Pi: [ [ "name", "dom", "cod", "isImpl" ], {
-                fresh (names = AST.names(ctx), name) { return name === "_" ? "_" : names.reduce((acc, n) => new RegExp(`^${acc}[']*$`).test(n) ? n + "'" : acc, name) },
+                fresh (names, name) { return name === "_" ? "_" : names.reduce((acc, n) => new RegExp(`^${acc}[']*$`).test(n) ? n + "'" : acc, name) },
                 toString (names = AST.names(ctx), prec = 0) {
-                  let name = this.fresh(this.name),
+                  let name = this.fresh(names, this.name),
                       piBind = (name, dom, isImpl) => (body => isImpl ? `{${body}}` : `(${body})`)(name + " : " + dom.toString(names, 0)),
                       goPi = (name, cod) => {
                         let keepCtx = { ...ctx, env: [...ctx.env] };
                         if (name) names.push([name]);
                         let res = cod.constructor.name !== "Pi" ? ` → ${cod.toString(names, 1)}` :
-                              cod.name !== "_" ? (name => piBind(name, cod.dom, cod.isImpl) + goPi(name, cod.cod))(this.fresh(cod.name)) :
+                              cod.name !== "_" ? (name => piBind(name, cod.dom, cod.isImpl) + goPi(name, cod.cod))(this.fresh(names, cod.name)) :
                                 ` → ${cod.dom.toString(names, 2)} → ${names.push("_"), cod.cod.toString(names, 1)}`;
                         Object.assign(ctx, keepCtx);
                         return res
@@ -1307,14 +1308,14 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
                       piBind(name, this.dom, this.isImpl) + goPi(name, this.cod)) } } ],
               U: [ [], { toString () { return "U" } } ],
               Let: [ [ "name", "type", "term", "next" ], {
-                fresh (names = AST.names(ctx), name) { return name === "_" ? "_" : names.reduce((acc, n) => new RegExp(`^${acc}[']*$`).test(n) ? n + "'" : acc, name) },
-                toString (names = AST.names(ctx), prec = 0) { let name = this.fresh(this.name); return (str => prec > 0 ? `(${str})` : str)
+                fresh (names, name) { return name === "_" ? "_" : names.reduce((acc, n) => new RegExp(`^${acc}[']*$`).test(n) ? n + "'" : acc, name) },
+                toString (names = AST.names(ctx), prec = 0) { let name = this.fresh(names, this.name); return (str => prec > 0 ? `(${str})` : str)
                   (`let ${name} : ${this.type.toString(names, 0)}\n    = ${this.term.toString(names, 0)};\n${names.push(name), this.next.toString(names, 0)}`) } } ],
               Meta: [ [ "mvar" ], { toString () { return `?${this.mvar}` } } ],
               AppPruning: [ [ "term", "prun" ], { toString (names = AST.names(ctx), prec) { return (str => prec > 2 ? `(${str})` : str)
                 (this.prun.reduce((str, mbIsImpl, i) => {
                   if (mbIsImpl === null) return str;
-                  const { name } = names[i], prun = (name === "_" ? "@" + i : name);
+                  const { name } = names[i], prun = (name === "_" ? "@." + i : name);
                   return str + " " + (mbIsImpl ? `{${prun}}` : prun)
                 }, this.term.toString(names, prec))) } } ],
     
@@ -1449,7 +1450,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
                 vrigid ({ vfunc, varg, icit }) { return new this.VRigid(vfunc.lvl, vfunc.spine.concat([ [varg, icit] ])) },
               }, { scrut: [ "vfunc" ] }),
               vAppSp ({ val, spine }) { return spine.reduce((vfunc, [varg, icit]) => this.vApp({ vfunc, varg, icit }), val) },
-              vMeta ({ mvar }) { let e = gctx.metas.get(mvar); return "val" in e ? new this.VFlex(mvar, []) : e.val },
+              vMeta ({ mvar }) { let e = gctx.metas.get(mvar); return "val" in e ? e.val : new this.VFlex(mvar, []) },
               vAppPruning ({ env, val, prun }) { return prun.reduce((acc, mbIsImpl, i) => mbIsImpl = null ? acc : this.vApp({ vfunc: acc, varg: env[i], icit: mbIsImpl }), val) },
               
               quote: Evaluator.match({
@@ -1474,9 +1475,9 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
               freshMeta ({ vtype }) {
                 const m = this.nextMetaVar(),
                       closed = this.eval({ env: [], term: ctx.path.reduce((acc, entry) => ({
-                        bind: new this.Pi(entry.bind.name, entry.bind.type, acc, false),
-                        define: new this.Let(entry.define.name, entry.define.type, entry.define.term, acc),
-                      })[Object.keys(entry)[0]], this.quote({ lvl: ctx.lvl, val: vtype })) });
+                        bind: () => new this.Pi(entry.bind.name, entry.bind.type, acc, false),
+                        define: () => new this.Let(entry.define.name, entry.define.type, entry.define.term, acc),
+                      })[Object.keys(entry)[0]](), this.quote({ lvl: ctx.lvl, val: vtype })) });
                 gctx.metas.set(m, { vtype: closed });
                 return new this.AppPruning(new this.Meta(m), ctx.prun) },
               
@@ -1494,8 +1495,8 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
                   new this.Pi(fval.name, this.rename({ pren, val: fval }), acc([this.liftPRen(pren), appVal]), fval.isImpl), s => s)
                 ([ { occ: null, dom: 0, cod: 0, ren: new Map() }, vtype ]) },
               pruneMeta ({ prun, mvar }) {
-                const { vtype, val } = gctx.metas.get(mvar);
-                if (typeof val !== "undefined") return Result.throw();
+                const { val: hasVal, vtype } = gctx.metas.get(mvar);
+                if (typeof hasVal !== "undefined") return Result.throw();
                 const newMvar = this.freshMeta({ vtype: this.eval({ env: [], val: this.pruneTy({ revPrun: prun.reverse(), vtype })}) });
                 gctx.metas.set(mvar, { vtype, val: this.eval({ env: [], val: this.lams({ lvl: prun.length, vtype, term: new this.AppPruning(new this.Meta({ mvar: newMvar }), prun) }) }) });
                 return newMvar },
@@ -1533,8 +1534,8 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
               solve ({ lvl, mvar, spine, val }) { return this.invertPRen({ lvl, spine })
                 .then(({ pren, mbPrun }) => this.solveWithPRen({ mvar, pren, mbPrun, val })) },
               solveWithPRen ({ mvar, pren, mbPrun, val }) {
-                const { val, vtype } = gctx.metas.get(mvar);
-                return (typeof val !== "undefined" ? Result.throw() : mbPrun === null ? Result.pure() :
+                const { val: hasVal, vtype } = gctx.metas.get(mvar);
+                return (typeof hasVal !== "undefined" ? Result.throw() : mbPrun === null ? Result.pure() :
                   this.pruneTy({ revPrun: mbPrun.reverse(), vtype })).then(() => this.rename({ pren: Object.assign(pren, { occ: mvar }), val }))
                   .then(rhs => gctx.metas.set(mvar, { vtype, val: this.eval({ env: [], val: this.lams({ lvl: pren.dom, vtype, term: rhs }) }) })) },
 
@@ -1577,14 +1578,14 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
               unifySp ({ lvl, spine0, spine1 }) { if (spine0.length !== spine1.length) return Result.throw({ msg: "Unification error: Rigid mismatch" })
                 else return spine0.reduce((acc, [val0], i) => acc.then(() => this.unify({ lvl, val0, val1: spine1[i][0] })), Result.pure()) },
     
-              bind ({ name, vtype }) { return { ...ctx,
+              bind ({ name, vtype }) { console.log("in bind", name, vtype); return { ...ctx,
                 env: ctx.env.concat([ new this.VRigid(ctx.lvl, []) ]),
-                names: ctx.names.set(name, [ ctx.lvl, vtype ]),
+                names: new Map(ctx.names).set(name, [ ctx.lvl, vtype ]),
                 lvl: ctx.lvl + 1, prun: [ false ].concat(ctx.prun),
                 path: [{ bind: { name, type: this.quote({ lvl: ctx.lvl, val: vtype }) } }].concat(ctx.path) } },
               define ({ name, term, val, type, vtype }) { return { ...ctx,
                 env: ctx.env.concat([ val ]),
-                names: ctx.names.set(name, [ ctx.lvl, vtype ]),
+                names: new Map(ctx.names).set(name, [ ctx.lvl, vtype ]),
                 lvl: ctx.lvl + 1, prun: [ null ].concat(ctx.prun),
                 path: [{ define: { name, type, term } }].concat(ctx.path) } },
               closeVal ({ val }) { return { term: this.quote({ val, lvl: ctx.lvl + 1 }), env: ctx.env } },
@@ -1609,29 +1610,29 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
               }, { scrut: [ { fvtype ({ vtype }) { return this.force({ val: vtype }) } } ] }),
               check: Evaluator.match({
                 "rlam vpi": [ {
-                  guard: ({ rterm, vtype }) => rterm.nameIcit === vtype.isImpl || rterm.nameIcit === vtype.name && vtype.isImpl,
-                  clause ({ rterm, vtype }) { return this.check.withContext(this.bind({ name: rterm.name, vtype: vtype.dom }),
-                    [ { rterm: rterm.body, vtype: this.cApp.withContext(this.bind({ name: rterm.name, vtype: vtype.dom }),
-                      [ { cls: vtype.cls, val: new this.VRigid(ctx.lvl, []) } ]) } ])
-                    .then(body => new this.Lam(rterm.name, body, vtype.isImpl)) } } ],
-                "rlet _": [ { guard: ({ vtype }) => vtype.constructor.name !== "VPi",
-                  clause ({ rterm, vtype }) { return this.check({ rterm: rterm.type, vtype: new this.VU() }).then(type => {
+                  guard: ({ rterm, fvtype }) => rterm.nameIcit === fvtype.isImpl || rterm.nameIcit === fvtype.name && fvtype.isImpl,
+                  clause ({ rterm, fvtype }) { return this.check.withContext(this.bind({ name: rterm.name, vtype: fvtype.dom }),
+                    [ { rterm: rterm.body, vtype: this.cApp.withContext(this.bind({ name: rterm.name, vtype: fvtype.dom }),
+                      [ { cls: fvtype.cls, val: new this.VRigid(ctx.lvl, []) } ]) } ])
+                    .then(body => new this.Lam(rterm.name, body, fvtype.isImpl)) } } ],
+                "rlet _": [ { guard: ({ fvtype }) => fvtype.constructor.name !== "VPi",
+                  clause ({ rterm, fvtype }) { return this.check({ rterm: rterm.type, vtype: new this.VU() }).then(type => {
                     let cvtype = this.eval({ term: type, env: ctx.env });
                     return this.check({ rterm: rterm.term, vtype: cvtype })
                       .then(term => this.check.withContext(define({ name: rterm.name, term, val: this.eval({ term, env: ctx.env }), type, vtype: cvtype }),
-                        [ { rterm: rterm.next, vtype } ])
+                        [ { rterm: rterm.next, fvtype } ])
                       .then(next => this.Let(rterm.name, type, term, next))) }) } } ],
-                "rhole _": [ { guard: ({ vtype }) => vtype.constructor.name !== "VPi", clause ({ vtype }) { return Result.pure(this.freshMeta({ vtype })) } } ],
-                _: [ { guard: ({ vtype }) => vtype.constructor.name === "VPi" && vtype.isImpl,
-                  clause ({ rterm, vtype }) { return this.check.withContext(this.bind({ name: vtype.name, vtype: vtype.dom, isNewBinder: true }),
-                    [ { rterm, vtype: this.cApp.withContext(this.bind({ name: vtype.name, vtype: vtype.dom }),
-                      [ { cls: vtype.cls, val: new this.VRigid(ctx.lvl, []) } ]) } ], res => res
-                        .then(body => new this.Lam(vtype.name, body, true))) } },
-                  { guard: () => true, clause ({ rterm, vtype }) { return this.infer({ rterm }).then(({ term, vtype }) => this.insertNeutral({ term, vtype }))
-                    .then(({ term, vtype: ivtype }) => this.unifyCatch({ lvl: ctx.lvl, val0: vtype, val1: ivtype }).then(() => term)) } } ]
-              }, { decorate: ({ rterm }) => gctx.pos = rterm.pos, scrut: [ "rterm", "vtype" ] }),
+                "rhole _": [ { guard: ({ fvtype }) => fvtype.constructor.name !== "VPi", clause ({ fvtype }) { return Result.pure(this.freshMeta({ vtype: fvtype })) } } ],
+                _: [ { guard: ({ fvtype }) => fvtype.constructor.name === "VPi" && fvtype.isImpl,
+                  clause ({ rterm, fvtype }) { return this.check.withContext(this.bind({ name: fvtype.name, vtype: fvtype.dom }),
+                    [ { rterm, vtype: this.cApp.withContext(this.bind({ name: fvtype.name, vtype: fvtype.dom }),
+                      [ { cls: fvtype.cls, val: new this.VRigid(ctx.lvl, []) } ]) } ], res => res
+                        .then(body => new this.Lam(fvtype.name, body, true))) } },
+                  { guard: () => true, clause ({ rterm, fvtype }) { return this.infer({ rterm }).then(({ term, vtype }) => this.insertNeutral({ term, vtype }))
+                    .then(({ term, vtype: ivtype }) => this.unifyCatch({ lvl: ctx.lvl, val0: fvtype, val1: ivtype }).then(() => term)) } } ]
+              }, { decorate: ({ rterm }) => gctx.pos = rterm.pos, scrut: [ "rterm", { fvtype ({ vtype }) { return this.force({ val: vtype }) } } ] }),
               infer: Evaluator.match({
-                rvar ({ rterm }) { let mbLvlVtype = ctx.names.get(rterm.name);
+                rvar ({ rterm }) { let mbLvlVtype = ctx.names.get(rterm.name); console.log("here", rterm.name, ctx.names);
                   return typeof mbLvlVtype === "undefined" ? Result.throw({ msg: `Elaboration error: Name not in scope "${rterm.name}"` }) :
                     Result.pure({ term: new this.Var(ctx.lvl - mbLvlVtype[0] - 1), vtype: mbLvlVtype[1] }) },
                 rlam: [ { guard: ({ rterm }) => typeof rterm.nameIcit === "string", clause: () => Result.throw({ msg: "Elaboration error: Cannot infer a named lambda" }) },
@@ -1685,7 +1686,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
                   .then(({ term }) => ({ elab: term.toString([]), metas: Array.from(gctx.metas).map(([mvar, { vtype, val }]) =>
                     new this.MetaEntry(mvar, this.quote({ ctx, lvl: 0, val: vtype }), typeof val === "undefined" ? null : this.quote({ ctx, lvl: 0, val }))).join("\n") })) },
               displayError ({ msg }, err) {
-                let lines = ctx.source.split(/\r\n?|\n/);
+                let lines = gctx.source.split(/\r\n?|\n/);
                 return err({ message: `${msg}\n${lines[gctx.pos[0][0] - 1]}\n${"-".repeat(gctx.pos[0][1] - 1)}${
                   "^".repeat(gctx.pos[1][1] - gctx.pos[0][1])} ${gctx.pos.join("-")}` }) }
             }), "nf", "type", "elab" ],
