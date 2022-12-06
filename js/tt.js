@@ -1278,28 +1278,28 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
               Lam: [ [ "name", "body", "isImpl" ], {
                 fresh (names, name) { return name === "_" ? "_" : names.reduce((acc, n) => new RegExp(`^${acc}[']*$`).test(n) ? n + "'" : acc, name) },
                 toString (names = AST.names(ctx), prec = 0) {
-                  let name = this.fresh(names, this.name),
-                      goLam = (names, name, body) => {
-                        let keepCtx = { ...ctx, env: [...ctx.env] }, n = names.concat([name]);
-                        let res = (name => body.constructor.name !== "Lam" ? `. ${body.toString(n, 0)}` :
-                              ` ${body.isImpl ? `{${name}}` : name}${goLam(n, name, body.body)}`)(this.fresh(n, body.name));
-                        Object.assign(ctx, keepCtx);
-                        return res
-                      };
+                  const name = this.fresh(names, this.name),
+                        goLam = (names, name, body) => {
+                          const keepCtx = { ...ctx, env: [...ctx.env] }, n = names.concat([name]),
+                                res = (name => body.constructor.name !== "Lam" ? `. ${body.toString(n, 0)}` :
+                                  ` ${body.isImpl ? `{${name}}` : name}${goLam(n, name, body.body)}`)(this.fresh(n, body.name));
+                          Object.assign(ctx, keepCtx);
+                          return res
+                        };
                   return (str => prec > 0 ? `(${str})` : str)(`λ ${this.isImpl ? `{${name}}` : name}${goLam(names, name, this.body)}`) } } ],
               Pi: [ [ "name", "dom", "cod", "isImpl" ], {
                 fresh (names, name) { return name === "_" ? "_" : names.reduce((acc, n) => new RegExp(`^${acc}[']*$`).test(n) ? n + "'" : acc, name) },
                 toString (names = AST.names(ctx), prec = 0) {
-                  let name = this.fresh(names, this.name),
-                      piBind = (name, dom, isImpl) => (body => isImpl ? `{${body}}` : `(${body})`)(name + " : " + dom.toString(names, 0)),
-                      goPi = (names, name, cod) => {
-                        let keepCtx = { ...ctx, env: [...ctx.env] }, n = names.concat([name])
-                        let res = cod.constructor.name !== "Pi" ? ` → ${cod.toString(n, 1)}` :
-                              cod.name !== "_" ? (name => piBind(name, cod.dom, cod.isImpl) + goPi(n, name, cod.cod))(this.fresh(n, cod.name)) :
-                                ` → ${cod.dom.toString(n, 2)} → ${cod.cod.toString(n.concat(["_"]), 1)}`;
-                        Object.assign(ctx, keepCtx);
-                        return res
-                      };
+                  const name = this.fresh(names, this.name),
+                        piBind = (name, dom, isImpl) => (body => isImpl ? `{${body}}` : `(${body})`)(name + " : " + dom.toString(names, 0)),
+                        goPi = (names, name, cod) => {
+                          const keepCtx = { ...ctx, env: [...ctx.env] }, n = names.concat([name]),
+                                res = cod.constructor.name !== "Pi" ? ` → ${cod.toString(n, 1)}` :
+                                  cod.name !== "_" ? (name => piBind(name, cod.dom, cod.isImpl) + goPi(n, name, cod.cod))(this.fresh(n, cod.name)) :
+                                    ` → ${cod.dom.toString(n, 2)} → ${cod.cod.toString(n.concat(["_"]), 1)}`;
+                          Object.assign(ctx, keepCtx);
+                          return res
+                        };
                   return (str => prec > 1 ? `(${str})` : str)
                     (name === "_" ? `${this.dom.toString(names, 2)} → ${this.cod.toString(names.concat(["_"]), 1)}` :
                       piBind(name, this.dom, this.isImpl) + goPi(names, name, this.cod)) } } ],
@@ -1312,7 +1312,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
               AppPruning: [ [ "term", "prun" ], { toString (names = AST.names(ctx), prec) { return (str => prec > 2 ? `(${str})` : str)
                 (this.prun.reduce((str, mbIsImpl, i) => {
                   if (mbIsImpl === null) return str;
-                  const { name } = names[i], prun = (name === "_" ? "@." + i : name);
+                  const name = names[i], prun = (name === "_" ? "@." + i : name);
                   return str + " " + (mbIsImpl ? `{${prun}}` : prun)
                 }, this.term.toString(names, prec))) } } ],
     
@@ -1488,13 +1488,13 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
                 Result.pure([ 0, new Set(), new Map(), [], true ])).then(([ dom, {}, ren, prun, isLinear ]) => ({ pren: { occ: null, dom, cod: lvl, ren }, mbPrun: isLinear ? prun : null })) },
   
               pruneTy ({ revPrun, vtype }) { return revPrun.reduceRight((acc, mbIsImpl) => (val, pren, fval = this.force({ val }),
-                appVal = this.cApp({ env: fval.cls, val: new this.VRigid(pren.cod, []) })) => mbIsImpl === null ? acc(appVal, this.skipPRen(pren)) :
+                appVal = this.cApp({ cls: fval.cls, val: new this.VRigid(pren.cod, []) })) => mbIsImpl === null ? acc(appVal, this.skipPRen(pren)) :
                   acc(appVal, this.liftPRen(pren)).then(([go, vt, pr]) => this.rename({ pren, val: fval }).then(dom => [tm => go(new this.Pi(fval.name, dom, tm, fval.isImpl)), vt, pr])),
-                (vtype, pren) => Promise.resolve([tm => tm, vtype, pren]))(vtype, { occ: null, dom: 0, cod: 0, ren: new Map() }).then(([go, vt, pr]) => this.rename({ pren: pr, val: vt }).then(tm => go(tm)[0])) },
+                (vtype, pren) => Result.pure([tm => tm, vtype, pren]))(vtype, { occ: null, dom: 0, cod: 0, ren: new Map() }).then(([go, vt, pr]) => this.rename({ pren: pr, val: vt }).then(tm => go(tm)[0])) },
 
               pruneMeta ({ prun, mvar }) {
                 const { val: hasVal, vtype } = gctx.metas.get(mvar);
-                if (typeof hasVal !== "undefined") return Result.throw();
+                if (typeof hasVal !== "undefined") return Result.throw({ msg: "meta already solved" });
                 const newMvar = this.freshMeta({ vtype: this.eval({ env: [], term: this.pruneTy({ revPrun: prun.reverse(), vtype })}) });
                 gctx.metas.set(mvar, { vtype, val: this.eval({ env: [], term: this.lams({ lvl: prun.length, vtype, term: new this.AppPruning(new this.Meta({ mvar: newMvar }), prun) }) }) });
                 return newMvar },
@@ -1509,7 +1509,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
                     status !== this.OKNonRenaming ? Result.pure([sp.concat([null, icit]), this.NeedsPruning]) : err({ msg: "Unification error: cannot prune with a non-renaming" }))(pren.ren.get(fval.lvl)))
                   (this.force({ val }))), Result.pure([ [], this.OKRenaming ]))
                   .then(([ sp, status ]) => (status === this.NeedsPruning ? Result.pure(this.pruneMeta({ prun: sp.map(([mbTm, icit]) => mbTm === null ? null : icit), mvar })) :
-                    "val" in gctx.metas.get(mvar) ? Result.pure(mvar) : Result.throw())
+                    "val" in gctx.metas.get(mvar) ? Result.pure(mvar) : Result.throw({ msg: "unsolved" }))
                     .then(mv => sp.reduceRight((acc, [mbTm, icit]) => mbTm === null ? acc : this.App(acc, mbTm, icit), new this.Meta(mv)))) },
               renameSp ({ pren, term, spine }) { return spine.reduce((acc, [val, icit]) => acc.then(func => this.rename({ val, pren }).then(arg => new this.App(func, arg, icit))), Result.pure(term)) },
               rename: Evaluator.match({
@@ -1533,7 +1533,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
                 .then(({ pren, mbPrun }) => this.solveWithPRen({ mvar, pren, mbPrun, val })) },
               solveWithPRen ({ mvar, pren, mbPrun, val }) {
                 const { val: hasVal, vtype } = gctx.metas.get(mvar);
-                return (typeof hasVal !== "undefined" ? Result.throw() : mbPrun === null ? Result.pure() :
+                return (typeof hasVal !== "undefined" ? Result.throw({ msg: "renaming already solved" }) : mbPrun === null ? Result.pure() :
                   this.pruneTy({ revPrun: mbPrun.reverse(), vtype })).then(() => this.rename({ pren: Object.assign(pren, { occ: mvar }), val }))
                   .then(rhs => gctx.metas.set(mvar, { vtype, val: this.eval({ env: [], term: this.lams({ lvl: pren.dom, vtype, term: rhs }) }) })) },
 
@@ -1544,7 +1544,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
                   .catch(() => this.solve({ lvl, mvar: mvar1, spine: spine1, val: new this.VFlex({ mvar: mvar0, spine: spine0 }) })) },
 
               intersect ({ lvl, mvar, spine0, spine1 }) {
-                if (spine0.length !== spine1.length) return Result.throw();
+                if (spine0.length !== spine1.length) return Result.throw({ err: "uneven spines" });
                 else return Result.pure(spine0.reduce((acc, [val0, icit0], i) => {
                   const [ val1 ] = spine1[i];
                   return ((fval0, fval1) => fval0.constructor.name !== "VRigid" || fval0.spine.length !== 0 || fval1.constructor.name !== "VRigid" || fval1.spine.length !== 0 || acc === null ? null :
