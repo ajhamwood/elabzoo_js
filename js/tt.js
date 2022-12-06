@@ -1176,8 +1176,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
             "rhole _": [ { guard: ({ fvtype }) => fvtype.constructor.name !== "VPi", clause () { return Result.pure(this.freshMeta()) } } ],
             _: [ { guard: ({ fvtype }) => fvtype.constructor.name === "VPi" && fvtype.isImpl,
               clause ({ rterm, fvtype }) { return this.check.withContext(this.bind({ name: fvtype.name, vtype: fvtype.dom, isNewBinder: true }),
-                [ { rterm, vtype: this.cApp.withContext(this.bind({ name: fvtype.name, vtype: fvtype.dom }),
-                  [ { cls: fvtype.cls, val: new this.VRigid(ctx.lvl, []) } ]) } ], res => res
+                [ { rterm, vtype: this.cApp({ cls: fvtype.cls, val: new this.VRigid(ctx.lvl, []) }) } ], res => res
                     .then(body => new this.Lam(fvtype.name, body, true))) } },
               { guard: () => true, clause ({ rterm, fvtype }) { return this.infer({ rterm }).then(({ term, vtype }) => this.insertNeutral({ term, vtype }))
                 .then(({ term, vtype: ivtype }) => this.unifyCatch({ lvl: ctx.lvl, val0: fvtype, val1: ivtype }).then(() => term)) } } ]
@@ -1280,32 +1279,30 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
                 fresh (names, name) { return name === "_" ? "_" : names.reduce((acc, n) => new RegExp(`^${acc}[']*$`).test(n) ? n + "'" : acc, name) },
                 toString (names = AST.names(ctx), prec = 0) {
                   let name = this.fresh(names, this.name),
-                      goLam = (name, body) => {
-                        let keepCtx = { ...ctx, env: [...ctx.env] };
-                        names.push(name);
-                        let res = (name => body.constructor.name !== "Lam" ? `. ${body.toString(names, 0)}` :
-                              ` ${body.isImpl ? `{${name}}` : name}${goLam(name, body.body)}`)(this.fresh(names, body.name));
+                      goLam = (names, name, body) => {
+                        let keepCtx = { ...ctx, env: [...ctx.env] }, n = names.concat([name]);
+                        let res = (name => body.constructor.name !== "Lam" ? `. ${body.toString(n, 0)}` :
+                              ` ${body.isImpl ? `{${name}}` : name}${goLam(n, name, body.body)}`)(this.fresh(n, body.name));
                         Object.assign(ctx, keepCtx);
                         return res
                       };
-                  return (str => prec > 0 ? `(${str})` : str)(`λ ${this.isImpl ? `{${name}}` : name}${goLam(name, this.body)}`) } } ],
+                  return (str => prec > 0 ? `(${str})` : str)(`λ ${this.isImpl ? `{${name}}` : name}${goLam(names, name, this.body)}`) } } ],
               Pi: [ [ "name", "dom", "cod", "isImpl" ], {
                 fresh (names, name) { return name === "_" ? "_" : names.reduce((acc, n) => new RegExp(`^${acc}[']*$`).test(n) ? n + "'" : acc, name) },
                 toString (names = AST.names(ctx), prec = 0) {
                   let name = this.fresh(names, this.name),
                       piBind = (name, dom, isImpl) => (body => isImpl ? `{${body}}` : `(${body})`)(name + " : " + dom.toString(names, 0)),
-                      goPi = (name, cod) => {
-                        let keepCtx = { ...ctx, env: [...ctx.env] };
-                        names.push(name);
-                        let res = cod.constructor.name !== "Pi" ? ` → ${cod.toString(names, 1)}` :
-                              cod.name !== "_" ? (name => piBind(name, cod.dom, cod.isImpl) + goPi(name, cod.cod))(this.fresh(names, cod.name)) :
-                                ` → ${cod.dom.toString(names, 2)} → ${cod.cod.toString(names.concat(["_"]), 1)}`;
+                      goPi = (names, name, cod) => {
+                        let keepCtx = { ...ctx, env: [...ctx.env] }, n = names.concat([name])
+                        let res = cod.constructor.name !== "Pi" ? ` → ${cod.toString(n, 1)}` :
+                              cod.name !== "_" ? (name => piBind(name, cod.dom, cod.isImpl) + goPi(n, name, cod.cod))(this.fresh(n, cod.name)) :
+                                ` → ${cod.dom.toString(n, 2)} → ${cod.cod.toString(n.concat(["_"]), 1)}`;
                         Object.assign(ctx, keepCtx);
                         return res
                       };
                   return (str => prec > 1 ? `(${str})` : str)
                     (name === "_" ? `${this.dom.toString(names, 2)} → ${this.cod.toString(names.concat(["_"]), 1)}` :
-                      piBind(name, this.dom, this.isImpl) + goPi(name, this.cod)) } } ],
+                      piBind(name, this.dom, this.isImpl) + goPi(names, name, this.cod)) } } ],
               U: [ [], { toString () { return "U" } } ],
               Let: [ [ "name", "type", "term", "next" ], {
                 fresh (names, name) { return name === "_" ? "_" : names.reduce((acc, n) => new RegExp(`^${acc}[']*$`).test(n) ? n + "'" : acc, name) },
@@ -1451,7 +1448,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
               }, { scrut: [ "vfunc" ] }),
               vAppSp ({ val, spine }) { return spine.reduce((vfunc, [varg, icit]) => this.vApp({ vfunc, varg, icit }), val) },
               vMeta ({ mvar }) { let e = gctx.metas.get(mvar); return "val" in e ? e.val : new this.VFlex(mvar, []) },
-              vAppPruning ({ env, val, prun }) { return prun.reduce((acc, mbIsImpl, i) => mbIsImpl = null ? acc : this.vApp({ vfunc: acc, varg: env[i], icit: mbIsImpl }), val) },
+              vAppPruning ({ env, val, prun }) { return prun.reduce((acc, mbIsImpl, i) => mbIsImpl === null ? acc : this.vApp({ vfunc: acc, varg: env[i], icit: mbIsImpl }), val) },
               
               quote: Evaluator.match({
                 vflex ({ lvl, val }) { return this.quoteSp({ lvl, term: new this.Meta(val.mvar), spine: val.spine }) },
@@ -1488,17 +1485,18 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
                   err({ msg: "Unification error: Must substitute on unblocked variable" }) : domvars.has(fval.lvl) ?
                     [ dom + 1, domvars, ren.delete(fval.lvl), prun.concat([null]), false ] :
                     [ dom + 1, domvars.add(fval.lvl), ren.set(fval.lvl, dom), prun.concat([isImpl]), isLinear ])(this.force({ val }))),
-                Result.pure([ 0, new Set(), new Map(), [], true ])).then(([ dom, ren ]) => ({ pren: { occ: null, dom, cod: lvl, ren }, mbPrun: isLinear ? prun : null })) },
-    
-              pruneTy ({ revPrun, vtype }) { return revPrun.reduceRight((acc, mbIsImpl) => ([pren, val], fval = this.force({ val }),
-                appVal = this.cApp({ env: fval.cls, val: new this.VRigid(pren.cod, []) })) => mbIsImpl === null ? acc([this.skipPRen(pren), appVal]) :
-                  new this.Pi(fval.name, this.rename({ pren, val: fval }), acc([this.liftPRen(pren), appVal]), fval.isImpl), s => s)
-                ([ { occ: null, dom: 0, cod: 0, ren: new Map() }, vtype ]) },
+                Result.pure([ 0, new Set(), new Map(), [], true ])).then(([ dom, {}, ren, prun, isLinear ]) => ({ pren: { occ: null, dom, cod: lvl, ren }, mbPrun: isLinear ? prun : null })) },
+  
+              pruneTy ({ revPrun, vtype }) { return revPrun.reduceRight((acc, mbIsImpl) => (val, pren, fval = this.force({ val }),
+                appVal = this.cApp({ env: fval.cls, val: new this.VRigid(pren.cod, []) })) => mbIsImpl === null ? acc(appVal, this.skipPRen(pren)) :
+                  acc(appVal, this.liftPRen(pren)).then(([go, vt, pr]) => this.rename({ pren, val: fval }).then(dom => [tm => go(new this.Pi(fval.name, dom, tm, fval.isImpl)), vt, pr])),
+                (vtype, pren) => Promise.resolve([tm => tm, vtype, pren]))(vtype, { occ: null, dom: 0, cod: 0, ren: new Map() }).then(([go, vt, pr]) => this.rename({ pren: pr, val: vt }).then(tm => go(tm)[0])) },
+
               pruneMeta ({ prun, mvar }) {
                 const { val: hasVal, vtype } = gctx.metas.get(mvar);
                 if (typeof hasVal !== "undefined") return Result.throw();
-                const newMvar = this.freshMeta({ vtype: this.eval({ env: [], val: this.pruneTy({ revPrun: prun.reverse(), vtype })}) });
-                gctx.metas.set(mvar, { vtype, val: this.eval({ env: [], val: this.lams({ lvl: prun.length, vtype, term: new this.AppPruning(new this.Meta({ mvar: newMvar }), prun) }) }) });
+                const newMvar = this.freshMeta({ vtype: this.eval({ env: [], term: this.pruneTy({ revPrun: prun.reverse(), vtype })}) });
+                gctx.metas.set(mvar, { vtype, val: this.eval({ env: [], term: this.lams({ lvl: prun.length, vtype, term: new this.AppPruning(new this.Meta({ mvar: newMvar }), prun) }) }) });
                 return newMvar },
 
               OKRenaming: 0,
@@ -1528,16 +1526,16 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
                   .then(cod => new this.Pi(fval.name, dom, cod, fval.isImpl))) },
                 vu () { return Result.pure(new this.U()) }
               }, { scrut: [ { fval ({ val }) { return this.force({ val }) } } ] }),
-              lams ({ lvl, vtype, term }) { return Array(lvl).fill().reduce((acc, _, i) => ([tm, val], fval = this.force({ val })) =>
-                new this.Lam(fval.name === "_" ? "x" + i : fval.name, acc([tm, this.cApp({ env: fval.cls, val: new this.VRigid(fval.cod, []) })]), fval.isImpl),
-                s => s)([term, vtype]) },
+              lams ({ lvl, vtype, term }) { return Array(lvl).fill().reduce((acc, _, i) => (tm, val, fval = this.force({ val })) =>
+                new this.Lam(fval.name === "_" ? "x" + i : fval.name, acc(tm, this.cApp({ env: fval.cls, val: new this.VRigid(fval.cod, []) })), fval.isImpl),
+                s => s)(term, vtype) },
               solve ({ lvl, mvar, spine, val }) { return this.invertPRen({ lvl, spine })
                 .then(({ pren, mbPrun }) => this.solveWithPRen({ mvar, pren, mbPrun, val })) },
               solveWithPRen ({ mvar, pren, mbPrun, val }) {
                 const { val: hasVal, vtype } = gctx.metas.get(mvar);
                 return (typeof hasVal !== "undefined" ? Result.throw() : mbPrun === null ? Result.pure() :
                   this.pruneTy({ revPrun: mbPrun.reverse(), vtype })).then(() => this.rename({ pren: Object.assign(pren, { occ: mvar }), val }))
-                  .then(rhs => gctx.metas.set(mvar, { vtype, val: this.eval({ env: [], val: this.lams({ lvl: pren.dom, vtype, term: rhs }) }) })) },
+                  .then(rhs => gctx.metas.set(mvar, { vtype, val: this.eval({ env: [], term: this.lams({ lvl: pren.dom, vtype, term: rhs }) }) })) },
 
               flexFlex ({ lvl, mvar0, spine0, mvar1, spine1 }) {
                 if (spine0.length < spine1.length) [ mvar0, spine0, mvar1, spine1 ] = [ mvar1, spine1, mvar0, spine0 ];
@@ -1578,9 +1576,9 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
               unifySp ({ lvl, spine0, spine1 }) { if (spine0.length !== spine1.length) return Result.throw({ msg: "Unification error: Rigid mismatch" })
                 else return spine0.reduce((acc, [val0], i) => acc.then(() => this.unify({ lvl, val0, val1: spine1[i][0] })), Result.pure()) },
     
-              bind ({ name, vtype }) { console.log("in bind", name, vtype); return { ...ctx,
+              bind ({ name, vtype, isNewBinder = false }) { console.log("in bind", name, vtype); return { ...ctx,
                 env: ctx.env.concat([ new this.VRigid(ctx.lvl, []) ]),
-                names: new Map(ctx.names).set(name, [ ctx.lvl, vtype ]),
+                names: isNewBinder ? ctx.names : new Map(ctx.names).set(name, [ ctx.lvl, vtype ]),
                 lvl: ctx.lvl + 1, prun: ctx.prun.concat([false]),
                 path: ctx.path.concat([{ bind: { name, type: this.quote({ lvl: ctx.lvl, val: vtype }) } }]) } },
               define ({ name, term, val, type, vtype }) { return { ...ctx,
@@ -1624,9 +1622,8 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
                       .then(next => this.Let(rterm.name, type, term, next))) }) } } ],
                 "rhole _": [ { guard: ({ fvtype }) => fvtype.constructor.name !== "VPi", clause ({ fvtype }) { return Result.pure(this.freshMeta({ vtype: fvtype })) } } ],
                 _: [ { guard: ({ fvtype }) => fvtype.constructor.name === "VPi" && fvtype.isImpl,
-                  clause ({ rterm, fvtype }) { return this.check.withContext(this.bind({ name: fvtype.name, vtype: fvtype.dom }),
-                    [ { rterm, vtype: this.cApp.withContext(this.bind({ name: fvtype.name, vtype: fvtype.dom }),
-                      [ { cls: fvtype.cls, val: new this.VRigid(ctx.lvl, []) } ]) } ], res => res
+                  clause ({ rterm, fvtype }) { return this.check.withContext(this.bind({ name: fvtype.name, vtype: fvtype.dom, isNewBinder: true }),
+                    [ { rterm, vtype: this.cApp({ cls: fvtype.cls, val: new this.VRigid(ctx.lvl, []) }) } ], res => res
                         .then(body => new this.Lam(fvtype.name, body, true))) } },
                   { guard: () => true, clause ({ rterm, fvtype }) { return this.infer({ rterm }).then(({ term, vtype }) => this.insertNeutral({ term, vtype }))
                     .then(({ term, vtype: ivtype }) => this.unifyCatch({ lvl: ctx.lvl, val0: fvtype, val1: ivtype }).then(() => term)) } } ]
