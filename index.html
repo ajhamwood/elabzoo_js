@@ -171,9 +171,10 @@ let sourceTextbox = $('#source'),
     runButton = $('#run'),
     adjustHeight = () => logDiv.style.height =
       window.innerHeight - 23 - sourceTextbox.offsetHeight + 'px',
-    log = (...args) => {
+    log = (o = {}, isErr = false) => {
       logDiv.childNodes.length && logDiv.appendChild(document.createElement('hr'));
-      logDiv.appendChild(document.createTextNode(args.join(/\r\n?|\n/g.test(args.join('')) ? '\n\n' : '\n'))) };
+      logDiv.appendChild(document.createTextNode(isErr ? o : Object.entries(o)
+        .reduce((str, [k, v]) => str + (/\r\n?|\n/g.test(v) ? `${k}:\n${v}\n\n` : `${k}: ${v}\n`), ''))) };
 new MutationObserver(adjustHeight).observe(
   sourceTextbox, { attributes: true, attributeFilter: [ "style" ] });
 $.targets({
@@ -225,13 +226,12 @@ $.targets({
       }
       $.queries({ "#repl > .run-option": { click () {
         app.emit("run", async () => {
-          log(...await app.state().ready[this.dataset.method].run()
-            .then(o => Object.entries(o ?? {}).map(([k, v]) => `${k}: ${v}`)))
+          log(await app.state().ready[this.dataset.method].run())
         })
       } } })
     },
     run (fn) {
-      fn().catch(e => { log(e.message); "stack" in e ? console.warn(e) : console.warn(e.message) })
+      fn().catch(e => { log(e.message, true); "stack" in e ? console.warn(e) : console.warn(e.message) })
         .then(() => $('#log').scrollTo(0, 1e6))
     },
     reset () {
