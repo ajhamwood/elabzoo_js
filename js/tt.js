@@ -1482,40 +1482,45 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
           gctx.metas.set(m, { vtype: closed });
           return new this.AppPruning(new this.Meta(m), ctx.prun) },
         
-        liftPRen: ({ occ, dom, cod, ren }) => ({ occ, dom: dom + 1, cod: cod + 1, ren: ren.set(cod, dom) }),
+        liftPRen: ({ occ, dom, cod, ren }) => ({ occ, dom: dom + 1, cod: cod + 1, ren: new Map(ren).set(cod, dom) }),
         skipPRen: ({ occ, dom, cod, ren }) => ({ occ, dom, cod: cod + 1, ren }),
         invertPRen ({ lvl, spine }) { return spine.reduce((acc, [val, isImpl]) => acc.then(([ dom, domvars, ren, prun, isLinear ], err) =>
           (fval => fval.constructor.name !== "VRigid" || fval.spine.length !== 0 ?
             err({ msg: "Unification error: Must substitute on unblocked variable" }) : domvars.has(fval.lvl) ?
-              [ dom + 1, domvars, ren.delete(fval.lvl), prun.concat([null]), false ] :
+              [ dom + 1, domvars, (ren.delete(fval.lvl), ren), prun.concat([null]), false ] :
               [ dom + 1, domvars.add(fval.lvl), ren.set(fval.lvl, dom), prun.concat([isImpl]), isLinear ])(this.force({ val }))),
           Result.pure([ 0, new Set(), new Map(), [], true ])).then(([ dom, {}, ren, prun, isLinear ]) => ({ pren: { occ: null, dom, cod: lvl, ren }, mbPrun: isLinear ? prun : null })) },
 
         pruneTy ({ revPrun, vtype }) { return revPrun.reduceRight((acc, mbIsImpl) => (val, pren, fval = this.force({ val })) => {
           if (fval.constructor.name !== "VPi") return Result.throw({ msg: "type too low arity for given pruning" });
           const appVal = this.cApp({ cls: fval.cls, val: new this.VRigid(pren.cod, []) });
+          console.log("appVal", appVal);
           return mbIsImpl === null ? acc(appVal, this.skipPRen(pren)) :
             acc(appVal, this.liftPRen(pren)).then(([go, vt, pr]) => this.rename({ pren, val: fval }).then(dom => [tm => go(new this.Pi(fval.name, dom, tm, fval.isImpl)), vt, pr])) },
-          (vtype, pren) => Result.pure([tm => tm, vtype, pren]))(vtype, { occ: null, dom: 0, cod: 0, ren: new Map() }).then(([go, vt, pr]) => this.rename({ pren: pr, val: vt }).then(tm => go(tm)[0])) },
+          (vtype, pren) => Result.pure([tm => tm, vtype, pren]))(vtype, { occ: null, dom: 0, cod: 0, ren: new Map() }).then(([go, vt, pr]) => this.rename({ pren: pr, val: vt }).then(tm => go(tm))) },
 
         pruneMeta ({ prun, mvar }) {
           const { val: hasVal, vtype } = gctx.metas.get(mvar);
           if (typeof hasVal !== "undefined") return Result.throw({ msg: "meta already solved" });
-          const newMvar = this.freshMeta({ vtype: this.eval({ env: [], term: this.pruneTy({ revPrun: prun.reverse(), vtype })}) });
-          gctx.metas.set(mvar, { vtype, val: this.eval({ env: [], term: this.lams({ lvl: prun.length, vtype, term: new this.AppPruning(new this.Meta({ mvar: newMvar }), prun) }) }) });
-          return newMvar },
+          return this.pruneTy({ revPrun: prun.reverse(), vtype }).then(prtype => {
+            const newMvar = this.nextMetaVar();
+            gctx.metas.set(newMvar, { vtype: prtype });
+            return this.lams({ lvl: prun.length, vtype, term: new this.AppPruning(new this.Meta(newMvar), prun) }).then(term => {
+              gctx.metas.set(mvar, { vtype, val: this.eval({ env: [], term }) });
+              return newMvar
+            })}) },
 
         OKRenaming: 0,
         OKNonRenaming: 1,
         NeedsPruning: 2,
         pruneVFlex ({ pren, mvar, spine }) { return spine.reduce((acc, [val, icit]) => acc.then(([sp, status], err) => (fval => fval.constructor.name !== "VRigid" || fval.spine.length !== 0 ?
-          status === this.NeedsPruning ? err({ msg: "Unification error: cannot prune non-variables" }) : this.rename({ pren, val: fval }).then(tm => [ sp.concat([tm, icit]), this.OKNonRenaming ]) :
-          (mbLvl => (typeof mbLvl === "number") ? Result.pure([ sp.concat([new this.Var(pren.dom - fval.lvl - 1), icit]), status ]) :
-            status !== this.OKNonRenaming ? Result.pure([sp.concat([null, icit]), this.NeedsPruning]) : err({ msg: "Unification error: cannot prune with a non-renaming" }))(pren.ren.get(fval.lvl)))
+          status === this.NeedsPruning ? err({ msg: "Unification error: cannot prune non-variables" }) : this.rename({ pren, val: fval }).then(tm => [ sp.concat([ [tm, icit] ]), this.OKNonRenaming ]) :
+          (mbLvl => (typeof mbLvl === "number") ? [ sp.concat([ [new this.Var(pren.dom - fval.lvl - 1), icit] ]), status ] :
+            status !== this.OKNonRenaming ? [sp.concat([ [null, icit] ]), this.NeedsPruning] : err({ msg: "Unification error: cannot prune with a non-renaming" }))(pren.ren.get(fval.lvl)))
           (this.force({ val }))), Result.pure([ [], this.OKRenaming ]))
-          .then(([ sp, status ]) => (status === this.NeedsPruning ? Result.pure(this.pruneMeta({ prun: sp.map(([mbTm, icit]) => mbTm === null ? null : icit), mvar })) :
-            "val" in gctx.metas.get(mvar) ? Result.pure(mvar) : Result.throw({ msg: "unsolved" }))
-            .then(mv => sp.reduceRight((acc, [mbTm, icit]) => mbTm === null ? acc : this.App(acc, mbTm, icit), new this.Meta(mv)))) },
+          .then(([ sp, status ]) => (status === this.NeedsPruning ? this.pruneMeta({ prun: sp.map(([mbTm, icit]) => mbTm === null ? null : icit), mvar }) :
+            "val" in gctx.metas.get(mvar) ? Result.throw({ msg: "already solved" }) : Result.pure(mvar))
+            .then(mv => sp.reduceRight((acc, [mbTm, icit]) => mbTm === null ? acc : new this.App(acc, mbTm, icit), new this.Meta(mv)))) },
         renameSp ({ pren, term, spine }) { return spine.reduce((acc, [val, icit]) => acc.then(func => this.rename({ val, pren }).then(arg => new this.App(func, arg, icit))), Result.pure(term)) },
         rename: Evaluator.match({
           vflex ({ pren, fval }) { return pren.occ === fval.mvar ? Result.throw({ msg: "Unification error: Occurs check" }) :
@@ -1526,27 +1531,28 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
             val: this.cApp({ cls: fval.cls, val: new this.VRigid(pren.cod, []) }) })
             .then(body => new this.Lam(fval.name, body, fval.isImpl)) },
           vpi ({ pren, fval }) { return this.rename({ pren, val: fval.dom })
-          .then(dom => this.rename({ pren: this.liftPRen(pren),
-            val: this.cApp({ cls: fval.cls, val: new this.VRigid(pren.cod, []) }) })
-            .then(cod => new this.Pi(fval.name, dom, cod, fval.isImpl))) },
+            .then(dom => this.rename({ pren: this.liftPRen(pren),
+              val: this.cApp({ cls: fval.cls, val: new this.VRigid(pren.cod, []) }) })
+              .then(cod => new this.Pi(fval.name, dom, cod, fval.isImpl))) },
           vu () { return Result.pure(new this.U()) }
         }, { scrut: [ { fval ({ val }) { return this.force({ val }) } } ] }),
-        lams ({ lvl, vtype, term }) { return Array(lvl).fill().reduce((acc, _, i) => (tm, val, fval = this.force({ val })) =>
-          new this.Lam(fval.name === "_" ? "x" + i : fval.name, acc(tm, this.cApp({ env: fval.cls, val: new this.VRigid(fval.cod, []) })), fval.isImpl),
-          s => s)(term, vtype) },
+        lams ({ lvl, vtype, term }) { return Array(lvl).fill().reduce((acc, _, i) => acc.then((go, err) => (tm, val, fval = this.force({ val })) =>
+          fval.constructor.name !== "VPi" ? err({ msg: "type too low arity for given lambda wrapping number" }) :
+            new this.Lam(fval.name === "_" ? "x" + i : fval.name, go(tm, this.cApp({ cls: fval.cls, val: new this.VRigid(i, []) })), fval.isImpl)),
+          Result.pure(s => s)).then(go => go(term, vtype)) },
         solve ({ lvl, mvar, spine, val }) { return this.invertPRen({ lvl, spine })
           .then(({ pren, mbPrun }) => this.solveWithPRen({ mvar, pren, mbPrun, val })) },
         solveWithPRen ({ mvar, pren, mbPrun, val }) {
           const { val: hasVal, vtype } = gctx.metas.get(mvar);
           return (typeof hasVal !== "undefined" ? Result.throw({ msg: "renaming already solved" }) : mbPrun === null ? Result.pure() :
             this.pruneTy({ revPrun: mbPrun.reverse(), vtype })).then(() => this.rename({ pren: Object.assign(pren, { occ: mvar }), val }))
-            .then(rhs => gctx.metas.set(mvar, { vtype, val: this.eval({ env: [], term: this.lams({ lvl: pren.dom, vtype, term: rhs }) }) })) },
+            .then(rhs => this.lams({ lvl: pren.dom, vtype, term: rhs }).then(term => gctx.metas.set(mvar, { vtype, val: this.eval({ env: [], term }) }))) },
 
         flexFlex ({ lvl, mvar0, spine0, mvar1, spine1 }) {
           if (spine0.length < spine1.length) [ mvar0, spine0, mvar1, spine1 ] = [ mvar1, spine1, mvar0, spine0 ];
           return this.invertPRen({ lvl, spine: spine0 })
-            .then(({ pren, mbPrun }) => this.solveWithPRen({ mvar: mvar0, pren, mbPrun, val: new this.VFlex({ mvar: mvar1, spine: spine1 }) }))
-            .catch(() => this.solve({ lvl, mvar: mvar1, spine: spine1, val: new this.VFlex({ mvar: mvar0, spine: spine0 }) })) },
+            .then(({ pren, mbPrun }) => this.solveWithPRen({ mvar: mvar0, pren, mbPrun, val: new this.VFlex(mvar1, spine1) }))
+            .catch(() => this.solve({ lvl, mvar: mvar1, spine: spine1, val: new this.VFlex(mvar0, spine0) })) },
 
         intersect ({ lvl, mvar, spine0, spine1 }) {
           if (spine0.length !== spine1.length) return Result.throw({ err: "uneven spines" });
