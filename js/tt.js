@@ -844,7 +844,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
           debug.log("Elaborate expression:");
           return this.doElab({ rterm })
             .then(({ term }) => ({ elab: term, metas: Array.from(gctx.metas).map(([mvar, soln]) =>
-              new this.MetaEntry(mvar, soln === null ? soln : this.quote({ ctx, lvl: 0, val: soln }))).join("\n") })) },
+              new this.MetaEntry(mvar, soln === null ? soln : this.quote({ lvl: 0, val: soln }))).join("\n") })) },
         displayError ({ msg }, err) {
           let lines = gctx.source.split(/\r\n?|\n/);
           return err({ message: `${msg}\n${lines[gctx.pos[0][0] - 1]}\n${"-".repeat(gctx.pos[0][1] - 1)}${
@@ -1236,7 +1236,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
           debug.log("Elaborate expression:");
           return this.doElab({ rterm })
             .then(({ term }) => ({ elab: term, metas: Array.from(gctx.metas).map(([mvar, soln]) =>
-              new this.MetaEntry(mvar, soln === null ? soln : this.quote({ ctx, lvl: 0, val: soln }))).join("\n") })) },
+              new this.MetaEntry(mvar, soln === null ? soln : this.quote({ lvl: 0, val: soln }))).join("\n") })) },
         displayError ({ msg }, err) {
           let lines = gctx.source.split(/\r\n?|\n/);
           return err({ message: `${msg}\n${lines[gctx.pos[0][0] - 1]}\n${"-".repeat(gctx.pos[0][1] - 1)}${
@@ -1494,7 +1494,6 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
         pruneTy ({ revPrun, vtype }) { return revPrun.reduceRight((acc, mbIsImpl) => (val, pren, fval = this.force({ val })) => {
           if (fval.constructor.name !== "VPi") return Result.throw({ msg: "type too low arity for given pruning" });
           const appVal = this.cApp({ cls: fval.cls, val: new this.VRigid(pren.cod, []) });
-          console.log("appVal", appVal);
           return mbIsImpl === null ? acc(appVal, this.skipPRen(pren)) :
             acc(appVal, this.liftPRen(pren)).then(([go, vt, pr]) => this.rename({ pren, val: fval }).then(dom => [tm => go(new this.Pi(fval.name, dom, tm, fval.isImpl)), vt, pr])) },
           (vtype, pren) => Result.pure([tm => tm, vtype, pren]))(vtype, { occ: null, dom: 0, cod: 0, ren: new Map() }).then(([go, vt, pr]) => this.rename({ pren: pr, val: vt }).then(tm => go(tm))) },
@@ -1504,7 +1503,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
           if (typeof hasVal !== "undefined") return Result.throw({ msg: "meta already solved" });
           return this.pruneTy({ revPrun: prun.reverse(), vtype }).then(prtype => {
             const newMvar = this.nextMetaVar();
-            gctx.metas.set(newMvar, { vtype: prtype });
+            gctx.metas.set(newMvar, { vtype: this.eval({ env: [], term: prtype }) });
             return this.lams({ lvl: prun.length, vtype, term: new this.AppPruning(new this.Meta(newMvar), prun) }).then(term => {
               gctx.metas.set(mvar, { vtype, val: this.eval({ env: [], term }) });
               return newMvar
@@ -1515,7 +1514,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
         NeedsPruning: 2,
         pruneVFlex ({ pren, mvar, spine }) { return spine.reduce((acc, [val, icit]) => acc.then(([sp, status], err) => (fval => fval.constructor.name !== "VRigid" || fval.spine.length !== 0 ?
           status === this.NeedsPruning ? err({ msg: "Unification error: cannot prune non-variables" }) : this.rename({ pren, val: fval }).then(tm => [ sp.concat([ [tm, icit] ]), this.OKNonRenaming ]) :
-          (mbLvl => (typeof mbLvl === "number") ? [ sp.concat([ [new this.Var(pren.dom - fval.lvl - 1), icit] ]), status ] :
+          (mbLvl => (typeof mbLvl === "number") ? [ sp.concat([ [new this.Var(pren.dom - mbLvl - 1), icit] ]), status ] :
             status !== this.OKNonRenaming ? [sp.concat([ [null, icit] ]), this.NeedsPruning] : err({ msg: "Unification error: cannot prune with a non-renaming" }))(pren.ren.get(fval.lvl)))
           (this.force({ val }))), Result.pure([ [], this.OKRenaming ]))
           .then(([ sp, status ]) => (status === this.NeedsPruning ? this.pruneMeta({ prun: sp.map(([mbTm, icit]) => mbTm === null ? null : icit), mvar }) :
@@ -1587,7 +1586,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
         unifySp ({ lvl, spine0, spine1 }) { if (spine0.length !== spine1.length) return Result.throw({ msg: "Unification error: Rigid mismatch" })
           else return spine0.reduce((acc, [val0], i) => acc.then(() => this.unify({ lvl, val0, val1: spine1[i][0] })), Result.pure()) },
 
-        bind ({ name, vtype, isNewBinder = false }) { console.log("in bind", name, vtype); return { ...ctx,
+        bind ({ name, vtype, isNewBinder = false }) { return { ...ctx,
           env: ctx.env.concat([ new this.VRigid(ctx.lvl, []) ]),
           names: isNewBinder ? ctx.names : new Map(ctx.names).set(name, [ ctx.lvl, vtype ]),
           lvl: ctx.lvl + 1, prun: ctx.prun.concat([false]),
@@ -1640,7 +1639,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
               .then(({ term, vtype: ivtype }) => this.unifyCatch({ val0: fvtype, val1: ivtype }).then(() => term)) } } ]
         }, { decorate: ({ rterm }) => gctx.pos = rterm.pos, scrut: [ "rterm", { fvtype ({ vtype }) { return this.force({ val: vtype }) } } ] }),
         infer: Evaluator.match({
-          rvar ({ rterm }) { let mbLvlVtype = ctx.names.get(rterm.name); console.log("here", rterm.name, ctx.names);
+          rvar ({ rterm }) { let mbLvlVtype = ctx.names.get(rterm.name);
             return typeof mbLvlVtype === "undefined" ? Result.throw({ msg: `Elaboration error: Name not in scope "${rterm.name}"` }) :
               Result.pure({ term: new this.Var(ctx.lvl - mbLvlVtype[0] - 1), vtype: mbLvlVtype[1] }) },
           rlam: [ { guard: ({ rterm }) => typeof rterm.nameIcit === "string", clause: () => Result.throw({ msg: "Elaboration error: Cannot infer a named lambda" }) },
@@ -1692,7 +1691,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
           debug.log("Elaborate expression:");
           return this.doElab({ rterm })
             .then(({ term }) => ({ elab: term.toString([]), metas: Array.from(gctx.metas).map(([mvar, { vtype, val }]) =>
-              new this.MetaEntry(mvar, this.quote({ ctx, lvl: 0, val: vtype }), typeof val === "undefined" ? null : this.quote({ ctx, lvl: 0, val }))).join("\n") })) },
+              new this.MetaEntry(mvar, this.quote({ lvl: 0, val: vtype }), typeof val === "undefined" ? null : this.quote({ lvl: 0, val }))).join("\n") })) },
         displayError ({ msg }, err) {
           let lines = gctx.source.split(/\r\n?|\n/);
           return err({ message: `${msg}\n${lines[gctx.pos[0][0] - 1]}\n${"-".repeat(gctx.pos[0][1] - 1)}${
