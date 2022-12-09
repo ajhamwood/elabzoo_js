@@ -1491,16 +1491,16 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
               [ dom + 1, domvars.add(fval.lvl), ren.set(fval.lvl, dom), prun.concat([isImpl]), isLinear ])(this.force({ val }))),
           Result.pure([ 0, new Set(), new Map(), [], true ])).then(([ dom, {}, ren, prun, isLinear ]) => ({ pren: { occ: null, dom, cod: lvl, ren }, mbPrun: isLinear ? prun : null })) },
 
-        pruneTy ({ revPrun, vtype }) { return revPrun.reduceRight((acc, mbIsImpl) => (val, pren, fval = this.force({ val })) => {
-          if (fval.constructor.name !== "VPi") return Result.throw({ msg: "type too low arity for given pruning" });
+        pruneTy ({ revPrun, vtype }) { return revPrun.reduce((res, mbIsImpl) => res.then(([go, val, pren, fval = this.force({ val })], err) => {
+          if (fval.constructor.name !== "VPi") return err({ msg: "Internal error: type too low arity for given pruning" });
           const appVal = this.cApp({ cls: fval.cls, val: new this.VRigid(pren.cod, []) });
-          return mbIsImpl === null ? acc(appVal, this.skipPRen(pren)) :
-            acc(appVal, this.liftPRen(pren)).then(([go, vt, pr]) => this.rename({ pren, val: fval }).then(dom => [tm => go(new this.Pi(fval.name, dom, tm, fval.isImpl)), vt, pr])) },
-          (vtype, pren) => Result.pure([tm => tm, vtype, pren]))(vtype, { occ: null, dom: 0, cod: 0, ren: new Map() }).then(([go, vt, pr]) => this.rename({ pren: pr, val: vt }).then(tm => go(tm))) },
+          return mbIsImpl === null ? [ go, appVal, this.skipPRen(pren) ] :
+            this.rename({ pren, val: fval }).then(dom => [ tm => go(new this.Pi(fval.name, dom, tm, fval.isImpl)), appVal, this.liftPRen(pren) ]) }),
+          Result.pure([tm => tm, vtype, { occ: null, dom: 0, cod: 0, ren: new Map() }])).then(([go, vt, pr]) => this.rename({ pren: pr, val: vt }).then(tm => go(tm))) },
 
         pruneMeta ({ prun, mvar }) {
           const { val: hasVal, vtype } = gctx.metas.get(mvar);
-          if (typeof hasVal !== "undefined") return Result.throw({ msg: "meta already solved" });
+          if (typeof hasVal !== "undefined") return Result.throw({ msg: "Internal error: meta already solved" });
           return this.pruneTy({ revPrun: prun.reverse(), vtype }).then(prtype => {
             const newMvar = this.nextMetaVar();
             gctx.metas.set(newMvar, { vtype: this.eval({ env: [], term: prtype }) });
@@ -1518,7 +1518,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
             status !== this.OKNonRenaming ? [sp.concat([ [null, icit] ]), this.NeedsPruning] : err({ msg: "Unification error: cannot prune with a non-renaming" }))(pren.ren.get(fval.lvl)))
           (this.force({ val }))), Result.pure([ [], this.OKRenaming ]))
           .then(([ sp, status ]) => (status === this.NeedsPruning ? this.pruneMeta({ prun: sp.map(([mbTm, icit]) => mbTm === null ? null : icit), mvar }) :
-            "val" in gctx.metas.get(mvar) ? Result.throw({ msg: "already solved" }) : Result.pure(mvar))
+            "val" in gctx.metas.get(mvar) ? Result.throw({ msg: "Internal error: already solved" }) : Result.pure(mvar))
             .then(mv => sp.reduceRight((acc, [mbTm, icit]) => mbTm === null ? acc : new this.App(acc, mbTm, icit), new this.Meta(mv)))) },
         renameSp ({ pren, term, spine }) { return spine.reduce((acc, [val, icit]) => acc.then(func => this.rename({ val, pren }).then(arg => new this.App(func, arg, icit))), Result.pure(term)) },
         rename: Evaluator.match({
@@ -1535,26 +1535,27 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
               .then(cod => new this.Pi(fval.name, dom, cod, fval.isImpl))) },
           vu () { return Result.pure(new this.U()) }
         }, { scrut: [ { fval ({ val }) { return this.force({ val }) } } ] }),
-        lams ({ lvl, vtype, term }) { return Array(lvl).fill().reduce((acc, _, i) => acc.then((go, err) => (tm, val, fval = this.force({ val })) =>
-          fval.constructor.name !== "VPi" ? err({ msg: "type too low arity for given lambda wrapping number" }) :
-            new this.Lam(fval.name === "_" ? "x" + i : fval.name, go(tm, this.cApp({ cls: fval.cls, val: new this.VRigid(i, []) })), fval.isImpl)),
-          Result.pure(s => s)).then(go => go(term, vtype)) },
+        lams ({ lvl, vtype, term }) { return Array(lvl).fill().reduce((res, _, i) => res.then(([go, val, fval = this.force({ val })], err) =>
+          fval.constructor.name !== "VPi" ? err({ msg: "Internal error: type too low arity for given lambda wrapping number" }) :
+            [ tm => go(new this.Lam(fval.name === "_" ? "x" + i : fval.name, tm, fval.isImpl)), this.cApp({ cls: fval.cls, val: new this.VRigid(i, []) }) ]),
+          Result.pure([s => s, vtype])).then(([go]) => go(term)) },
         solve ({ lvl, mvar, spine, val }) { return this.invertPRen({ lvl, spine })
           .then(({ pren, mbPrun }) => this.solveWithPRen({ mvar, pren, mbPrun, val })) },
         solveWithPRen ({ mvar, pren, mbPrun, val }) {
           const { val: hasVal, vtype } = gctx.metas.get(mvar);
-          return (typeof hasVal !== "undefined" ? Result.throw({ msg: "renaming already solved" }) : mbPrun === null ? Result.pure() :
+          return (typeof hasVal !== "undefined" ? Result.throw({ msg: "Internal error: renaming already solved" }) : mbPrun === null ? Result.pure() :
             this.pruneTy({ revPrun: mbPrun.reverse(), vtype })).then(() => this.rename({ pren: Object.assign(pren, { occ: mvar }), val }))
             .then(rhs => this.lams({ lvl: pren.dom, vtype, term: rhs }).then(term => gctx.metas.set(mvar, { vtype, val: this.eval({ env: [], term }) }))) },
 
         flexFlex ({ lvl, mvar0, spine0, mvar1, spine1 }) {
           if (spine0.length < spine1.length) [ mvar0, spine0, mvar1, spine1 ] = [ mvar1, spine1, mvar0, spine0 ];
+          let res;
           return this.invertPRen({ lvl, spine: spine0 })
-            .then(({ pren, mbPrun }) => this.solveWithPRen({ mvar: mvar0, pren, mbPrun, val: new this.VFlex(mvar1, spine1) }))
-            .catch(() => this.solve({ lvl, mvar: mvar1, spine: spine1, val: new this.VFlex(mvar0, spine0) })) },
+            .then(({ pren, mbPrun }) => res = this.solveWithPRen({ mvar: mvar0, pren, mbPrun, val: new this.VFlex(mvar1, spine1) }))
+            .catch(() => res ?? this.solve({ lvl, mvar: mvar1, spine: spine1, val: new this.VFlex(mvar0, spine0) })) },
 
         intersect ({ lvl, mvar, spine0, spine1 }) {
-          if (spine0.length !== spine1.length) return Result.throw({ err: "uneven spines" });
+          if (spine0.length !== spine1.length) return Result.throw({ err: "Internal error: uneven spines" });
           else return Result.pure(spine0.reduce((acc, [val0, icit0], i) => {
             const [ val1 ] = spine1[i];
             return ((fval0, fval1) => fval0.constructor.name !== "VRigid" || fval0.spine.length !== 0 || fval1.constructor.name !== "VRigid" || fval1.spine.length !== 0 || acc === null ? null :

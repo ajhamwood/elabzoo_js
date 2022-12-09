@@ -172,9 +172,11 @@ let sourceTextbox = $('#source'),
     adjustHeight = () => logDiv.style.height =
       window.innerHeight - 23 - sourceTextbox.offsetHeight + 'px',
     log = (o = {}, isErr = false) => {
+      const str = isErr ? o : Object.entries(o)
+        .reduce((str, [k, v]) => str + (/\r\n?|\n/g.test(v) ? `${k}:\n${v}\n\n` : `${k}: ${v}\n`), '');
       logDiv.childNodes.length && logDiv.appendChild(document.createElement('hr'));
-      logDiv.appendChild(document.createTextNode(isErr ? o : Object.entries(o)
-        .reduce((str, [k, v]) => str + (/\r\n?|\n/g.test(v) ? `${k}:\n${v}\n\n` : `${k}: ${v}\n`), ''))) };
+      logDiv.appendChild(document.createTextNode(str));
+      console.log(str) };
 new MutationObserver(adjustHeight).observe(
   sourceTextbox, { attributes: true, attributeFilter: [ "style" ] });
 $.targets({
