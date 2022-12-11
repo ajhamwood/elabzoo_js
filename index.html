@@ -204,7 +204,7 @@ $.targets({
     selectTT (i) {
       this.tt = parseInt(i);
       app.emit("fetchExample");
-      if (this.S === null) this.S = TT({debug: false, which: i});
+      if (this.S === null) this.S = TT({debug: "evaluator", which: i});
       else {
         this.S.select(i)
       }
