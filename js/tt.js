@@ -1165,15 +1165,14 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
           "rlam vpi": [ {
             guard ({ rterm, fvtype }) { return rterm.nameIcit === fvtype.isImpl || rterm.nameIcit === fvtype.name && fvtype.isImpl },
             clause ({ rterm, fvtype }) { return this.check.withContext(this.bind({ name: rterm.name, vtype: fvtype.dom }),
-              [ { rterm: rterm.body, vtype: this.cApp.withContext(this.bind({ name: rterm.name, vtype: fvtype.dom }),
-                [ { cls: fvtype.cls, val: new this.VRigid(ctx.lvl, []) } ]) } ])
+              [ { rterm: rterm.body, vtype: this.cApp({ cls: fvtype.cls, val: new this.VRigid(ctx.lvl, []) }) } ])
               .then(body => new this.Lam(rterm.name, body, fvtype.isImpl)) } } ],
           "rlet _": [ { guard: ({ fvtype }) => fvtype.constructor.name !== "VPi",
             clause ({ rterm, fvtype }) { return this.check({ rterm: rterm.type, vtype: new this.VU() }).then(type => {
               let cvtype = this.eval({ term: type, env: ctx.env });
               return this.check({ rterm: rterm.term, vtype: cvtype })
                 .then(term => this.check.withContext(define({ name: term.name, val: this.eval({ term, env: ctx.env }), vtype: cvtype }),
-                  [ { rterm: rterm.next, fvtype } ])
+                  [ { rterm: rterm.next, vtype: fvtype } ])
                 .then(next => this.Let(rterm.name, type, term, next))) }) } } ],
           "rhole _": [ { guard: ({ fvtype }) => fvtype.constructor.name !== "VPi", clause () { return Result.pure(this.freshMeta()) } } ],
           _: [ { guard: ({ fvtype }) => fvtype.constructor.name === "VPi" && fvtype.isImpl,
@@ -1629,15 +1628,14 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
           "rlam vpi": [ {
             guard: ({ rterm, fvtype }) => rterm.nameIcit === fvtype.isImpl || rterm.nameIcit === fvtype.name && fvtype.isImpl,
             clause ({ rterm, fvtype }) { return this.check.withContext(this.bind({ name: rterm.name, vtype: fvtype.dom }),
-              [ { rterm: rterm.body, vtype: this.cApp.withContext(this.bind({ name: rterm.name, vtype: fvtype.dom }),
-                [ { cls: fvtype.cls, val: new this.VRigid(ctx.lvl, []) } ]) } ])
+              [ { rterm: rterm.body, vtype: this.cApp({ cls: fvtype.cls, val: new this.VRigid(ctx.lvl, []) }) } ])
               .then(body => new this.Lam(rterm.name, body, fvtype.isImpl)) } } ],
           "rlet _": [ { guard: ({ fvtype }) => fvtype.constructor.name !== "VPi",
             clause ({ rterm, fvtype }) { return this.check({ rterm: rterm.type, vtype: new this.VU() }).then(type => {
               let cvtype = this.eval({ term: type, env: ctx.env });
               return this.check({ rterm: rterm.term, vtype: cvtype })
                 .then(term => this.check.withContext(define({ name: rterm.name, term, val: this.eval({ term, env: ctx.env }), type, vtype: cvtype }),
-                  [ { rterm: rterm.next, fvtype } ])
+                  [ { rterm: rterm.next, vtype: fvtype } ])
                 .then(next => this.Let(rterm.name, type, term, next))) }) } } ],
           "rhole _": [ { guard: ({ fvtype }) => fvtype.constructor.name !== "VPi", clause ({ fvtype }) { return Result.pure(this.freshMeta({ vtype: fvtype })) } } ],
           _: [ { guard: ({ fvtype }) => fvtype.constructor.name === "VPi" && fvtype.isImpl,
@@ -2012,11 +2010,11 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
         
         liftPRen: ({ occ, dom, cod, ren }) => ({ occ, dom: dom + 1, cod: cod + 1, ren: new Map(ren).set(cod, dom) }),
         skipPRen: ({ occ, dom, cod, ren }) => ({ occ, dom, cod: cod + 1, ren }),
-        invertPRen ({ lvl, spine }) { return spine.reduce((acc, [val, isImpl]) => acc.then(([ dom, domvars, ren, prun, isLinear ], err) =>
-          (fval => fval.constructor.name !== "VRigid" || fval.spine.length !== 0 ?
+        invertPRen ({ lvl, spine }) { return spine.reduce((acc, [val, isImpl]) => acc.then(([ dom, domvars, ren, prun, isLinear ], err) => { const fval = this.force({ val });
+          return fval.constructor.name !== "VRigid" || fval.spine.length !== 0 ?
             err({ msg: "Unification error: Must substitute on unblocked variable" }) : domvars.has(fval.lvl) ?
               [ dom + 1, domvars, (ren.delete(fval.lvl), ren), prun.concat([null]), false ] :
-              [ dom + 1, domvars.add(fval.lvl), ren.set(fval.lvl, dom), prun.concat([isImpl]), isLinear ])(this.force({ val }))),
+              [ dom + 1, domvars.add(fval.lvl), ren.set(fval.lvl, dom), prun.concat([isImpl]), isLinear ] }),
           Result.pure([ 0, new Set(), new Map(), [], true ])).then(([ dom, {}, ren, prun, isLinear ]) =>
             ({ pren: { occ: null, dom, cod: lvl, ren }, mbPrun: isLinear ? prun : null })) },
 
@@ -2027,7 +2025,6 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
             this.rename({ pren, val: fval }).then(dom => [ tm => go(new this.Pi(fval.name, dom, tm, fval.isImpl)), appVal, this.liftPRen(pren) ]) }),
           Result.pure([tm => tm, vtype, { occ: null, dom: 0, cod: 0, ren: new Map() }]))
             .then(([go, vt, pr]) => this.rename({ pren: pr, val: vt }).then(tm => go(tm))) },
-
         pruneMeta ({ prun, mvar }) {
           const { blocking, vtype } = gctx.metas.get(mvar);
           if (typeof blocking === "undefined") return Result.throw({ msg: "Internal error: meta already solved while pruning" });
@@ -2037,21 +2034,20 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
               gctx.metas.set(mvar, { vtype, val: this.eval({ env: [], term }) });
               return newMvar
             })}) },
-
-        OKRenaming: 3,
-        OKNonRenaming: 4,
-        NeedsPruning: 5,
-        pruneVFlex ({ pren, mvar, spine }) { return spine.reduce((acc, [val, icit]) => acc.then(([sp, status], err) =>
-          (fval => fval.constructor.name !== "VRigid" || fval.spine.length !== 0 ?
-            status === this.NeedsPruning ? err({ msg: "Unification error: can only prune with variables" }) :
-              this.rename({ pren, val: fval }).then(tm => [ sp.concat([ [tm, icit] ]), this.OKNonRenaming ]) :
-            (mbLvl => (typeof mbLvl === "number") ? [ sp.concat([ [new this.Var(pren.dom - mbLvl - 1), icit] ]), status ] :
-              status !== this.OKNonRenaming ? [sp.concat([ [null, icit] ]), this.NeedsPruning] :
-                err({ msg: "Unification error: can only prune renamings" }))(pren.ren.get(fval.lvl)))
-          (this.force({ val }))), Result.pure([ [], this.OKRenaming ]))
-            .then(([ sp, status ]) => (status === this.NeedsPruning ? this.pruneMeta({ prun: sp.map(([mbTm, icit]) => mbTm === null ? null : icit), mvar }) :
+        pruneVFlex: ((OKRenaming, OKNonRenaming, NeedsPruning) => function ({ pren, mvar, spine }) {
+          return spine.reduce((acc, [val, icit]) => acc.then(([sp, status], err) => { const fval = this.force({ val });
+            if (fval.constructor.name !== "VRigid" || fval.spine.length !== 0)
+              return status === NeedsPruning ? err({ msg: "Unification error: can only prune with variables" }) :
+                this.rename({ pren, val: fval }).then(tm => [ sp.concat([ [tm, icit] ]), OKNonRenaming ]);
+            else { const mbLvl = pren.ren.get(fval.lvl);
+              return (typeof mbLvl === "number") ? [ sp.concat([ [new this.Var(pren.dom - mbLvl - 1), icit] ]), status ] :
+                status !== OKNonRenaming ? [sp.concat([ [null, icit] ]), NeedsPruning] :
+                  err({ msg: "Unification error: can only prune renamings" }) } }), Result.pure([ [], OKRenaming ]))
+            .then(([ sp, status ]) => (status === NeedsPruning ? this.pruneMeta({ prun: sp.map(([mbTm, icit]) => mbTm === null ? null : icit), mvar }) :
               "val" in gctx.metas.get(mvar) ? Result.throw({ msg: "Internal error: meta already solved while pruning a flex variable" }) : Result.pure(mvar))
-              .then(mv => sp.reduceRight((acc, [mbTm, icit]) => mbTm === null ? acc : new this.App(acc, mbTm, icit), new this.Meta(mv)))) },
+              .then(mv => sp.reduceRight((acc, [mbTm, icit]) => mbTm === null ? acc : new this.App(acc, mbTm, icit), new this.Meta(mv)))) })
+          (Symbol("OKRenaming"), Symbol("OKNonRenaming"), Symbol("NeedsPruning")),
+
         renameSp ({ pren, term, spine }) { return spine.reduce((acc, [val, icit]) =>
           acc.then(func => this.rename({ val, pren }).then(arg => new this.App(func, arg, icit))), Result.pure(term)) },
         rename: Evaluator.match({
@@ -2092,10 +2088,9 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
         intersect ({ lvl, mvar, spine0, spine1 }) {
           if (spine0.length !== spine1.length) return Result.throw({ err: "Internal error: intersecting with uneven spines" });
           else return Result.pure(spine0.reduce((acc, [val0, icit0], i) => {
-            const [ val1 ] = spine1[i];
-            return ((fval0, fval1) => fval0.constructor.name !== "VRigid" || fval0.spine.length !== 0 || fval1.constructor.name !== "VRigid" || fval1.spine.length !== 0 ||
-              acc === null ? null : acc.concat([ fval0.lvl === fval1.lvl ? icit0 : null ]))
-            (this.force({ val: val0 }), this.force({ val: val1 }))
+            const [ val1 ] = spine1[i], fval0 = this.force({ val: val0 }), fval1 = this.force({ val: val1 });
+            return fval0.constructor.name !== "VRigid" || fval0.spine.length !== 0 || fval1.constructor.name !== "VRigid" || fval1.spine.length !== 0 ||
+              acc === null ? null : acc.concat([ fval0.lvl === fval1.lvl ? icit0 : null ])
           }, [])).then(mbPrun => mbPrun === null ? this.unifySp({ lvl, spine0, spine1 }) :
             mbPrun.includes(null) ? this.pruneMeta({ prun: mbPrun, mvar }).then(() => {}) : undefined) },
 
@@ -2167,9 +2162,8 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
             clause ({ rterm, fvtype }) { return (rterm.mbType === null ? Result.pure() : this.check({ rterm: rterm.mbType, vtype: new this.VU() })
               .then(type => this.unifyCatch({ val0: this.eval({ env: ctx.env, term: type }), val1: fvtype.dom, unifyErr: this.LamBinderType })))
               .then(() => this.check.withContext(this.bind({ name: rterm.name, vtype: fvtype.dom }),
-                [ { rterm: rterm.body, vtype: this.cApp.withContext(this.bind({ name: rterm.name, vtype: fvtype.dom }),
-                  [ { cls: fvtype.cls, val: new this.VRigid(ctx.lvl, []) } ]) } ]))
-                .then(body => new this.Lam(rterm.name, body, fvtype.isImpl)) } } ],
+                [ { rterm: rterm.body, vtype: this.cApp({ cls: fvtype.cls, val: new this.VRigid(ctx.lvl, []) }) } ]))
+              .then(body => new this.Lam(rterm.name, body, fvtype.isImpl)) } } ],
           "rvar vpi": [ {
             guard ({ rterm, fvtype }) { const mbVtype = ctx.names.get(rterm.name)?.[1];
               return fvtype.isImpl && typeof mbVtype !== "undefined" && this.force({ val: mbVtype }).constructor.name === "VFlex" },
@@ -2180,7 +2174,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
               let cvtype = this.eval({ term: type, env: ctx.env });
               return this.check({ rterm: rterm.term, vtype: cvtype })
                 .then(term => this.check.withContext(define({ name: rterm.name, term, val: this.eval({ term, env: ctx.env }), type, vtype: cvtype }),
-                  [ { rterm: rterm.next, fvtype } ])
+                  [ { rterm: rterm.next, vtype: fvtype } ])
                 .then(next => this.Let(rterm.name, type, term, next))) }) } } ],
           "rhole _": [ { guard: ({ fvtype }) => !["VPi", "VFlex"].includes(fvtype.constructor.name), clause ({ fvtype }) { return Result.pure(this.freshMeta({ vtype: fvtype })) } } ],
           _: [ { guard: ({ fvtype }) => fvtype.constructor.name === "VPi" && fvtype.isImpl,
@@ -2238,7 +2232,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
         doElab ({ rterm }) {
           this.reset();
           return this.infer({ rterm })
-            .then(res => this.checkEverything({ checkvar: this.nextCheckVar(false) }).then(() => res))
+            .then(res => this.checkEverything({ checkvar: this.nextCheckVar() }).then(() => res))
             .catch(this.displayError) },
         nf ({ data: rterm }) {
           debug.log("Expression normal form:");
