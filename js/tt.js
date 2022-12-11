@@ -24,11 +24,12 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
     static tag = class AST {};
     static names (ctx) { let names = []; ctx.path.forEach(({ bind, define }) => names.push((bind ?? define).name)); return names }
     constructor (nodes, wc) {
+      const self = this;
       for (let node in nodes) this[node] = (([props, meths = {}]) => ({ [node]: class extends AST.tag {
         constructor (...args) { super();
           for (let i = 0; i < args.length && i < props.length; i++) this[props[i]] = args[i];
           for (let meth in meths) meths[meth] = Object.assign((f => ({ [meth]: function () {
-            return f.apply(this, arguments)
+            return f.apply({ ...this, AST: self }, arguments)
           } })[meth])(meths[meth]), { withContext: wc(() => meths[meth], () => this) });
           Object.assign(this, meths);
         } get [Symbol.toStringTag] () { return node }
@@ -1784,10 +1785,10 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
             return str + " " + (mbIsImpl ? `{${prun}}` : prun)
           }, this.term.toString(names, prec))) } } ],
         PostponedCheck: [ [ "checkvar" ], { toString (names = AST.names(ctx), prec = 0) { const problem = gctx.checks.get(this.checkvar); return ({
-          unchecked: () => problem.ctx.prun.reduceRight((acc, mbIsImpl, i) => mbIsImpl === null ? acc : 
-            new this.App(acc, this.VRigid(i, []), mbIsImpl), new this.Meta(problem.checked.mvar)).toString(names, prec),
+          unchecked: () => problem.unchecked.ctx.prun.reduceRight((acc, mbIsImpl, i) => mbIsImpl === null ? acc : 
+            new this.AST.App(acc, new this.AST.Var(i), mbIsImpl), new this.AST.Meta(problem.unchecked.mvar)).toString(names, prec),
           checked: () => problem.checked.term.toString(names, prec)
-        })[Object.keys(check)[0]]() } } ],
+        })[Object.keys(problem)[0]]() } } ],
 
         VFlex: [ [ "mvar", "spine" ] ],
         VRigid: [ [ "lvl", "spine" ] ],
@@ -1858,9 +1859,9 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
 
         lamBinder (state) { return Parser.choice([
           this.region(Parser.do([ this.binder, ({}, s) => Parser.option(Parser.seq([ this.keyword(":"), this.cut(this.term, "Malformed typed explicit lambda") ]))(s),
-            ({}, s, t) => ({ ...t, data: [ s.data[0], false, t.data ?? null, [state.pos, t.pos] ] }) ]), "parens"),
+            ({}, s, t) => ({ ...t, data: [ s.data[0], false, t.data instanceof Array ? null : t.data, [state.pos, t.pos] ] }) ]), "parens"),
           Parser.peek(this.region(Parser.do([ this.binder, ({}, s) => Parser.option(Parser.seq([ this.keyword(":"), this.cut(this.term, "Malformed typed implicit lambda") ]))(s),
-            ({}, s, t) => ({ ...t, data: [ s.data[0], true, t.data ?? null, [state.pos, t.pos] ] }) ]), "braces")),
+            ({}, s, t) => ({ ...t, data: [ s.data[0], true, t.data instanceof Array ? null : t.data, [state.pos, t.pos] ] }) ]), "braces")),
           this.region(Parser.do([ this.ident, ({}, s) => Parser.seq([ this.keyword("="), this.cut(this.binder, "Malformed named implicit lambda") ])(s),
             ({}, s, t) => ({ ...t, data: [ t.data[0], s.data, null, [state.pos, t.data[1]] ] }) ]), "braces"),
           Parser.map(this.binder, ([ data, pos ]) => [ data, false, null, [state.pos, pos[1]] ]) ])(state) },
@@ -1916,7 +1917,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
           u () { return new this.VU() },
           meta ({ term }) { return this.vMeta({ mvar: term.mvar }) },
           apppruning ({ term, env }) { return this.vAppPruning({ env, val: this.eval({ term: term.term, env }), prun: term.prun }) },
-          postponedcheck ({ term, env }) { return this.vCheck({ env, checkval: term.checkval }) }
+          postponedcheck ({ term, env }) { return this.vCheck({ env, checkvar: term.checkvar }) }
         }, { scrut: [ "term" ] }),
         cApp ({ cls: { term, env }, val }) { return this.eval({ term, env: env.concat([ val ]) }) },
         vApp: Evaluator.match({
@@ -1929,7 +1930,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
         vCheck ({ env, checkvar }) { const problem = gctx.checks.get(checkvar); return ({  // CheckVar as AST?
           unchecked: () => this.vAppPruning({ env, val: this.vMeta({ mvar: problem.unchecked.mvar }), prun: problem.unchecked.ctx.prun }),
           checked: () => this.eval({ env, term: problem.checked.term })
-        })[Object.keys(check)[0]]() },
+        })[Object.keys(problem)[0]]() },
         vAppPruning ({ env, val, prun }) { return prun.reduce((acc, mbIsImpl, i) => mbIsImpl === null ? acc :
           this.vApp({ vfunc: acc, varg: env[i], icit: mbIsImpl }), val) },
         
@@ -1949,8 +1950,8 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
         } return val },
 
         ...((m, c) => ({
-          nextMetaVar: () => ++m,
-          nextCheckVar: () => ++c,
+          nextMetaVar: () => m++,
+          nextCheckVar: () => c++,
           reset: () => { m = 0; c = 0 },
         }))(0, 0),
         newRawMeta ({ blocking, vtype }) {
@@ -1980,27 +1981,27 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
             gctx.metas.set(mvar, { vtype: m.vtype, val: this.eval({ env: [], term: solution }) });
             return this.retryCheck({ blocking: m.blocking })
           } },
-        retryCheck ({ blocking }) { return Array.from(blocking).reduce((res, block) => res.then(() => (check => ({
-          unchecked: () => this.retryUnchecked({ checkvar: block, unchecked: check.unchecked }),
+        retryCheck ({ blocking }) { return Array.from(blocking).reduce((res, block) => res.then(() => (problem => ({
+          unchecked: () => this.retryUnchecked({ checkvar: block, unchecked: problem.unchecked }),
           checked: () => {}
-        })[Object.keys(check)[0]]())(gctx.checks.get(block))), Result.pure()) },
+        })[Object.keys(problem)[0]]())(gctx.checks.get(block))), Result.pure()) },
         retryUnchecked: Evaluator.match({
           vflex ({ fvtype, checkvar }) { gctx.metas.get(fvtype.mvar).blocking.add(checkvar) },
           _ ({ checkvar, unchecked }) { return this.check.withContext(unchecked.ctx, [ { rterm: unchecked.rterm, vtype: unchecked.vtype } ], res => res
             .then(term => this.unifyPlaceholder({ term, mvar: unchecked.mvar })
               .then(() => gctx.checks.set(checkvar, { checked: { term } })))) }
         }, { scrut: [ { fvtype ({ unchecked }) { return this.force({ val: unchecked.vtype }) } } ] }),
-        checkEverything ({ checkvar }) { return Array(checkvar).fill().reduce((res, _, c) => res.then(() => (check => ({
+        checkEverything ({ checkvar }) { return Array(checkvar).fill().reduce((res, _, c) => res.then(() => (problem => ({
           unchecked: () => {
             debug.log("checkEverything", c, checkvar);
-            return this.infer.withContext(check.unchecked.ctx, [ { rterm: check.unchecked.rterm } ], res => res
+            return this.infer.withContext(problem.unchecked.ctx, [ { rterm: problem.unchecked.rterm } ], res => res
               .then(term => this.insertNeutral({ term }))
               .then(({ term, vtype }) => {
                 gctx.checks.set(c, { checked: { term } });
-                return this.unifyCatch({ val0: check.unchecked.vtype, val1: vtype, unifyErr: this.ExpectedInferred })
-                  .then(() => this.unifyPlaceholder({ term, mvar: check.unchecked.mvar })) })) },
+                return this.unifyCatch({ val0: problem.unchecked.vtype, val1: vtype, unifyErr: this.ExpectedInferred })
+                  .then(() => this.unifyPlaceholder({ term, mvar: problem.unchecked.mvar })) })) },
           checked: () => {}
-        })[Object.keys(check)[0]])(gctx.checks.get(c))), Result.pure()) },
+        })[Object.keys(problem)[0]])(gctx.checks.get(c))), Result.pure()) },
         
         liftPRen: ({ occ, dom, cod, ren }) => ({ occ, dom: dom + 1, cod: cod + 1, ren: new Map(ren).set(cod, dom) }),
         skipPRen: ({ occ, dom, cod, ren }) => ({ occ, dom, cod: cod + 1, ren }),
@@ -2157,7 +2158,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
           "rlam vpi": [ {
             guard: ({ rterm, fvtype }) => rterm.nameIcit === fvtype.isImpl || rterm.nameIcit === fvtype.name && fvtype.isImpl,
             clause ({ rterm, fvtype }) { return (rterm.mbType === null ? Result.pure() : this.check({ rterm: rterm.mbType, vtype: new this.VU() })
-              .then(type => this.unifyCatch({ val0: this.eval({ env: ctx.env, type }), val1: fvtype.dom, unifyErr: this.LamBinderType })))
+              .then(type => this.unifyCatch({ val0: this.eval({ env: ctx.env, term: type }), val1: fvtype.dom, unifyErr: this.LamBinderType })))
               .then(() => this.check.withContext(this.bind({ name: rterm.name, vtype: fvtype.dom }),
                 [ { rterm: rterm.body, vtype: this.cApp.withContext(this.bind({ name: rterm.name, vtype: fvtype.dom }),
                   [ { cls: fvtype.cls, val: new this.VRigid(ctx.lvl, []) } ]) } ]))
@@ -2183,9 +2184,9 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
               clause ({ rterm, fvtype }) {
                 const checkvar = this.nextCheckVar(), keepCtx = Object.fromEntries(Object.entries(ctx).map(([k, v]) => ([k, v instanceof Array ? v.slice() :
                   v instanceof Map ? new Map(v) : v])));
-                gctx.checks.set(m, { unchecked: { ctx: keepCtx, rterm, vtype: fvtype, mvar: this.newMeta({ vtype: fvtype }) } });
+                gctx.checks.set(checkvar, { unchecked: { ctx: keepCtx, rterm, vtype: fvtype, mvar: this.newMeta({ vtype: fvtype }) } });
                 gctx.metas.get(fvtype.mvar).blocking.add(checkvar);
-                return new this.PostponedCheck({ checkvar }) } },
+                return Result.pure(new this.PostponedCheck(checkvar)) } },
             { guard: () => true, clause ({ rterm, fvtype }) { return this.infer({ rterm }).then(({ term, vtype }) => this.insertNeutral({ term, vtype }))
               .then(({ term, vtype: ivtype }) => this.unifyCatch({ val0: fvtype, val1: ivtype, unifyErr: this.ExpectedInferred }).then(() => term)) } } ]
         }, { decorate: ({ rterm }) => gctx.pos = rterm.pos, scrut: [ "rterm", { fvtype ({ vtype }) { return this.force({ val: vtype }) } } ] }),
