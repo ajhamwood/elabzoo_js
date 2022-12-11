@@ -21,7 +21,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
   }
 
   class AST {
-    static tag = class AST {};
+    static tag = class AST {}
     static names (ctx) { let names = []; ctx.path.forEach(({ bind, define }) => names.push((bind ?? define).name)); return names }
     constructor (nodes, wc) {
       const self = this;
@@ -1727,9 +1727,10 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
       astData: ({ local: ctx, global: gctx }) => ({  // Correctly printed terms in debug is a non-feature!
         RVar: [ [ "name", "pos" ], { toString () { return `RVar ${this.name}` } } ],
         RLam: [ [ "name", "nameIcit", "mbType", "body", "pos" ], { toString () {  // nameIcit := name:string | isImpl:boolean
-          return `RLam ${({ boolean: (str => this.nameIcit ? `{${str}}` : this.mbType === null ? str : `(${str})`)
-              (this.mbType === null ? this.name : `${this.name} : ${this.mbType}`),
-            string: `{${this.nameIcit} = ${this.name}}` })[typeof this.nameIcit]}. ${this.body}` } } ],
+          switch (typeof this.nameIcit) {
+            case "boolean": const str = this.mbType === null ? this.name : `${this.name} : ${this.mbType}`;
+              return `RLam ${this.nameIcit ? `{${str}}` : this.mbType === null ? str : `(${str})`}. ${this.body}`
+            case "string": return `RLam {${this.nameIcit} = ${this.name}}. ${this.body}` } } } ],
         RApp: [ [ "func", "arg", "nameIcit", "pos" ], { toString () {   // nameIcit := name:string | isImpl:boolean
           return `(${this.func} :@: ${({ boolean: this.nameIcit ? `{${this.arg}}` : this.arg,
             string: `{${this.nameIcit} = ${this.arg}}` })[typeof this.nameIcit]})` } } ],
@@ -1740,55 +1741,61 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
           { toString () { return `let ${this.name} : ${this.type} = ${this.term};\n${this.next}` } } ],
         RHole: [ [ "pos" ], { toString () { return `{?}` } } ],
 
-        Var: [ [ "ix" ], { toString (names = AST.names(ctx)) { let lvl = names.length - this.ix - 1;
-          return lvl >= 0 ? (str => str === "_" ? "@" + this.ix : str)(names[lvl]) : `#${-1 - lvl}` } } ],
-        App: [ [ "func", "arg", "isImpl" ], { toString (names = AST.names(ctx), prec = 0) { return (str => prec > 2 ? `(${str})` : str)
-          (`${this.func.toString(names, 2)} ${(arg => this.isImpl ? `{${arg.toString(names, 0)}}` : arg.toString(names, 3))(this.arg)}`) } } ],
+        Var: [ [ "ix" ], { toString (names = AST.names(ctx)) { const lvl = names.length - this.ix - 1;
+          if (lvl >= 0) { const str = names[lvl]; return str === "_" ? "@" + this.ix : str }
+          else return `#${-1 - lvl}` } } ],
+        App: [ [ "func", "arg", "isImpl" ], { toString (names = AST.names(ctx), prec = 0) {
+          const str = `${this.func.toString(names, 2)} ${this.isImpl ? `{${this.arg.toString(names, 0)}}` : this.arg.toString(names, 3)}`;
+          return prec > 2 ? `(${str})` : str } } ],
         Lam: [ [ "name", "body", "isImpl" ], {
           fresh (names, name) { return name === "_" ? "_" : names.reduce((acc, n) => new RegExp(`^${acc}[']*$`).test(n) ? n + "'" : acc, name) },
-          toString (names = AST.names(ctx), prec = 0) {
-            const name = this.fresh(names, this.name),
-                  goLam = (names, name, body) => {
-                    const keepCtx = { ...ctx, env: [...ctx.env] }, n = names.concat([name]),
-                          res = (name => body.constructor.name !== "Lam" ? `. ${body.toString(n, 0)}` :
-                            ` ${body.isImpl ? `{${name}}` : name}${goLam(n, name, body.body)}`)(this.fresh(n, body.name));
-                    Object.assign(ctx, keepCtx);
-                    return res
-                  };
-            return (str => prec > 0 ? `(${str})` : str)(`λ ${this.isImpl ? `{${name}}` : name}${goLam(names, name, this.body)}`) } } ],
+          toString (names = AST.names(ctx), prec = 0) { const
+            name = this.fresh(names, this.name),
+            goLam = (names, name, body) => { let res;
+              const keepCtx = { ...ctx, env: [...ctx.env] }, ns = names.concat([name]);
+              if (body.constructor.name !== "Lam") res = `. ${body.toString(ns, 0)}`;
+              else { const n = this.fresh(ns, body.name); res = ` ${body.isImpl ? `{${n}}` : n}${goLam(ns, n, body.body)}` }
+              Object.assign(ctx, keepCtx);
+              return res
+            },
+            str = `λ ${this.isImpl ? `{${name}}` : name}${goLam(names, name, this.body)}`
+            return prec > 0 ? `(${str})` : str } } ],
         Pi: [ [ "name", "dom", "cod", "isImpl" ], {
           fresh (names, name) { return name === "_" ? "_" : names.reduce((acc, n) => new RegExp(`^${acc}[']*$`).test(n) ? n + "'" : acc, name) },
-          toString (names = AST.names(ctx), prec = 0) {
-            const name = this.fresh(names, this.name),
-                  piBind = (names, name, dom, isImpl) => (body => isImpl ? `{${body}}` : `(${body})`)(name + " : " + dom.toString(names, 0)),
-                  goPi = (names, name, cod) => {
-                    const keepCtx = { ...ctx, env: [...ctx.env] }, n = names.concat([name]),
-                          res = cod.constructor.name !== "Pi" ? ` → ${cod.toString(n, 1)}` :
-                            cod.name !== "_" ? (name => piBind(n, name, cod.dom, cod.isImpl) + goPi(n, name, cod.cod))(this.fresh(n, cod.name)) :
-                              ` → ${cod.dom.toString(n, 2)} → ${cod.cod.toString(n.concat(["_"]), 1)}`;
-                    Object.assign(ctx, keepCtx);
-                    return res
-                  };
-            return (str => prec > 1 ? `(${str})` : str)
-              (name === "_" ? `${this.dom.toString(names, 2)} → ${this.cod.toString(names.concat(["_"]), 1)}` :
-                piBind(names, name, this.dom, this.isImpl) + goPi(names, name, this.cod)) } } ],
+          toString (names = AST.names(ctx), prec = 0) { const
+            name = this.fresh(names, this.name),
+            piBind = (names, name, dom, isImpl) => (body => isImpl ? `{${body}}` : `(${body})`)(name + " : " + dom.toString(names, 0)),
+            goPi = (names, name, cod) => { let res;
+              const keepCtx = { ...ctx, env: [...ctx.env] }, ns = names.concat([name]);
+              if (cod.constructor.name !== "Pi") res = ` → ${cod.toString(ns, 1)}`;
+              else if (cod.name === "_" ) res = ` → ${cod.dom.toString(ns, 2)} → ${cod.cod.toString(ns.concat(["_"]), 1)}`;
+              else { const n = this.fresh(ns, cod.name); res = piBind(ns, n, cod.dom, cod.isImpl) + goPi(ns, n, cod.cod) }
+              Object.assign(ctx, keepCtx);
+              return res
+            },
+            str = name === "_" ? `${this.dom.toString(names, 2)} → ${this.cod.toString(names.concat(["_"]), 1)}` :
+              piBind(names, name, this.dom, this.isImpl) + goPi(names, name, this.cod);
+            return prec > 1 ? `(${str})` : str } } ],
         U: [ [], { toString () { return "U" } } ],
         Let: [ [ "name", "type", "term", "next" ], {
           fresh (names, name) { return name === "_" ? "_" : names.reduce((acc, n) => new RegExp(`^${acc}[']*$`).test(n) ? n + "'" : acc, name) },
-          toString (names = AST.names(ctx), prec = 0) { let name = this.fresh(names, this.name); return (str => prec > 0 ? `(${str})` : str)
-            (`let ${name} : ${this.type.toString(names, 0)}\n    = ${this.term.toString(names, 0)};\n${this.next.toString(names.concat([name]), 0)}`) } } ],
+          toString (names = AST.names(ctx), prec = 0) { const
+            name = this.fresh(names, this.name),
+            str = `let ${name} : ${this.type.toString(names, 0)}\n    = ${this.term.toString(names, 0)};\n${this.next.toString(names.concat([name]), 0)}`;
+            return prec > 0 ? `(${str})` : str } } ],
         Meta: [ [ "mvar" ], { toString () { return `?${this.mvar}` } } ],
-        AppPruning: [ [ "term", "prun" ], { toString (names = AST.names(ctx), prec) { return (str => prec > 2 ? `(${str})` : str)
-          (this.prun.reduce((str, mbIsImpl, i) => {
+        AppPruning: [ [ "term", "prun" ], { toString (names = AST.names(ctx), prec) {
+          const str = this.prun.reduce((str, mbIsImpl, i) => {
             if (mbIsImpl === null) return str;
             const name = names[i], prun = (name === "_" ? "@." + i : name);
             return str + " " + (mbIsImpl ? `{${prun}}` : prun)
-          }, this.term.toString(names, prec))) } } ],
-        PostponedCheck: [ [ "checkvar" ], { toString (names = AST.names(ctx), prec = 0) { const problem = gctx.checks.get(this.checkvar); return ({
-          unchecked: () => problem.unchecked.ctx.prun.reduceRight((acc, mbIsImpl, i) => mbIsImpl === null ? acc : 
-            new this.AST.App(acc, new this.AST.Var(i), mbIsImpl), new this.AST.Meta(problem.unchecked.mvar)).toString(names, prec),
-          checked: () => problem.checked.term.toString(names, prec)
-        })[Object.keys(problem)[0]]() } } ],
+          }, this.term.toString(names, prec));
+          return prec > 2 ? `(${str})` : str } } ],
+        PostponedCheck: [ [ "checkvar" ], { toString (names = AST.names(ctx), prec = 0) { const problem = gctx.checks.get(this.checkvar);
+          switch (Object.keys(problem)[0]) {
+            case "unchecked": return problem.unchecked.ctx.prun.reduceRight((acc, mbIsImpl, i) => mbIsImpl === null ? acc : 
+              new this.AST.App(acc, new this.AST.Var(i), mbIsImpl), new this.AST.Meta(problem.unchecked.mvar)).toString(names, prec);
+            case "checked": return problem.checked.term.toString(names, prec) } } } ],
 
         VFlex: [ [ "mvar", "spine" ] ],
         VRigid: [ [ "lvl", "spine" ] ],
@@ -1870,7 +1877,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
           ({}, s) => Parser.many(this.lamBinder)(s),
           (x, y, s) => Parser.seq([ this.cut(this.keyword("."), "Lambda without body", { start: x.pos, end: y.pos }), this.term ])(s),
           ({}, {}, s, t) => ({ ...t, data: s.data.reduceRight((acc, [b, ni, mbT, pos]) =>
-            new this.RLam(b, ni, mbT, acc, this.setPos({ start: pos[0] })), t.data) }) ])(state) },  // mbType in third position
+            new this.RLam(b, ni, mbT, acc, this.setPos({ start: pos[0] })), t.data) }) ])(state) },
 
         piBinder (state) { let icitBinder = glyphs => this.region(Parser.do([ Parser.many(this.binder),
             ({}, s) => (tm => glyphs === "parens" ? tm : Parser.alt(tm, s => ({ ...s, data: new this.RHole(gctx.pos) })))
@@ -1926,7 +1933,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
           vrigid ({ vfunc, varg, icit }) { return new this.VRigid(vfunc.lvl, vfunc.spine.concat([ [varg, icit] ])) },
         }, { scrut: [ "vfunc" ] }),
         vAppSp ({ val, spine }) { return spine.reduce((vfunc, [varg, icit]) => this.vApp({ vfunc, varg, icit }), val) },
-        vMeta ({ mvar }) { let e = gctx.metas.get(mvar); return "val" in e ? e.val : new this.VFlex(mvar, []) },
+        vMeta ({ mvar }) { let m = gctx.metas.get(mvar); return "val" in m ? m.val : new this.VFlex(mvar, []) },
         vCheck ({ env, checkvar }) { const problem = gctx.checks.get(checkvar); return ({  // CheckVar as AST?
           unchecked: () => this.vAppPruning({ env, val: this.vMeta({ mvar: problem.unchecked.mvar }), prun: problem.unchecked.ctx.prun }),
           checked: () => this.eval({ env, term: problem.checked.term })
