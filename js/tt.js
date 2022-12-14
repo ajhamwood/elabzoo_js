@@ -1827,7 +1827,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
           return Parser.do([ Parser.char(opener),
             ({}, s) => Parser.seq([ Parser.option(this.ws), p ])(s),
             (x, y, s) => Parser.seq([ this.cut(Parser.char(closer), `Unclosed ${glyphs}`, { start: x.pos, end: y.pos }),
-              s1 => Parser.option(this.ws)(s1).then(s2 => (({ ...s2, data: s.data }))) ])(s) ]) },
+              s1 => Parser.option(this.ws)(s1).then(s2 => (({ ...s2, data: s.data }))) ])(s) ]) },  // TODO: whitespace not part of expression position
         symbol (str, isTest = true) { return state => Parser.map(Parser.guard(
           Parser.many((isTest ? this : Parser).satisfy(s => s.data === str[s.offset - state.offset - 1], `Symbol: "${str}"`)),
           data => data.length === str.length), data => data.join(""))(state) },
@@ -1851,16 +1851,16 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
           Parser.map(this.keyword("_"), () => new this.RHole(gctx.pos)),
           this.region(this.term, "parens") ])(state) },
         arg (state) { return Parser.choice([
-          this.region(Parser.do([ this.ident,
+          Parser.seq([ this.region(Parser.do([ this.ident,
             ({}, s) => Parser.seq([ this.keyword("="), this.cut(this.term, "Malformed named implicit argument") ])(s),
-            ({}, s, t) => ({ ...t, data: [ t.data, s.data ] }) ]), "braces"),
-          Parser.map(this.region(this.term, "braces"), data => [ data, true ]),
-          Parser.map(this.atom, data => [ data, false ]) ])(state) },
+            ({}, s, t) => ({ ...t, data: [ t.data, s.data ] }) ]), "braces"), s => ({ ...s, data: s.data.concat([ s.pos ]) }) ]),
+          Parser.seq([ this.region(this.term, "braces"), s => ({ ...s, data: [ s.data, true, s.pos ] }) ]),
+          Parser.seq([ this.atom, s => ({ ...s, data: [ s.data, false, s.pos ] }) ]) ])(state) },
 
         binder (state) { return Parser.map(this.catchSymbol(Parser.alt(this.ident, this.keyword("_"))), data => [ data, gctx.pos ])(state) },
         spine (state) { return Parser.do([ this.atom, ({}, s) => Parser.alt(Parser.many(this.arg), s => ({ ...s, data: [] }))(s),
           ({}, s, t) => (this.setPos({ start: state.pos }),
-            { ...t, data: t.data.reduce((acc, arg) => new this.RApp(acc, ...arg, this.setPos({ end: arg[0].pos[1] })), s.data) }) ])(state) },
+            { ...t, data: t.data.reduce((acc, [arg, nameIcit, pos]) => new this.RApp(acc, arg, nameIcit, this.setPos({ end: pos })), s.data) }) ])(state) },
 
         lamBinder (state) { return Parser.choice([
           this.region(Parser.do([ this.binder, ({}, s) => Parser.option(Parser.seq([ this.keyword(":"), this.cut(this.term, "Malformed typed explicit lambda") ]))(s),
@@ -1996,17 +1996,15 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
             .then(term => this.unifyPlaceholder({ term, mvar: unchecked.mvar })
               .then(() => gctx.checks.set(checkvar, { checked: { term } })))) }
         }, { scrut: [ { fvtype ({ unchecked }) { return this.force({ val: unchecked.vtype }) } } ] }),
-        checkEverything ({ checkvar }) { return Array(checkvar).fill().reduce((res, _, c) => res.then(() => (problem => ({
-          unchecked: () => {
-            debug.log("checkEverything", c, checkvar);
-            return this.infer.withContext(problem.unchecked.ctx, [ { rterm: problem.unchecked.rterm } ], res => res
-              .then(term => this.insertNeutral({ term }))
-              .then(({ term, vtype }) => {
-                gctx.checks.set(c, { checked: { term } });
-                return this.unifyCatch({ val0: problem.unchecked.vtype, val1: vtype, unifyErr: this.ExpectedInferred })
-                  .then(() => this.unifyPlaceholder({ term, mvar: problem.unchecked.mvar })) })) },
-          checked: () => {}
-        })[Object.keys(problem)[0]])(gctx.checks.get(c))), Result.pure()) },
+        checkEverything ({ checkvar }) { return Array(checkvar).fill().reduce((res, _, c) => res.then(() => {
+          const problem = gctx.checks.get(c);
+          if (Object.keys(problem)[0] === "checked") return;
+          debug.log("checkEverything", c, checkvar);
+          return this.infer.withContext(problem.unchecked.ctx, [ { rterm: problem.unchecked.rterm } ], res => res.then(this.insertNeutral)
+            .then(({ term, vtype }) => {
+              gctx.checks.set(c, { checked: { term } });
+              return this.unifyCatch({ val0: problem.unchecked.vtype, val1: vtype, unifyErr: this.ExpectedInferred })
+                .then(() => this.unifyPlaceholder({ term, mvar: problem.unchecked.mvar })) })) }), Result.pure()) },
         
         liftPRen: ({ occ, dom, cod, ren }) => ({ occ, dom: dom + 1, cod: cod + 1, ren: new Map(ren).set(cod, dom) }),
         skipPRen: ({ occ, dom, cod, ren }) => ({ occ, dom, cod: cod + 1, ren }),
@@ -2168,7 +2166,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
             guard ({ rterm, fvtype }) { const mbVtype = ctx.names.get(rterm.name)?.[1];
               return fvtype.isImpl && typeof mbVtype !== "undefined" && this.force({ val: mbVtype }).constructor.name === "VFlex" },
             clause ({ rterm, fvtype }) { const [ lvl, val ] = ctx.names.get(rterm.name);
-              return this.unify({ lvl: ctx.lvl, val0: this.force({ val }), val1: fvtype }).then(() => new this.VRigid(ctx.lvl - lvl - 1, [])) } } ],
+              return this.unify({ lvl: ctx.lvl, val0: this.force({ val }), val1: fvtype }).then(() => new this.Var(ctx.lvl - lvl - 1, [])) } } ],
           "rlet _": [ { guard: ({ fvtype }) => !["VPi", "VFlex"].includes(fvtype.constructor.name),
             clause ({ rterm, fvtype }) { return this.check({ rterm: rterm.type, vtype: new this.VU() }).then(type => {
               let cvtype = this.eval({ term: type, env: ctx.env });
@@ -2196,8 +2194,8 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
             return typeof mbLvlVtype === "undefined" ? Result.throw({ msg: `Elaboration error: Name not in scope "${rterm.name}"` }) :
               Result.pure({ term: new this.Var(ctx.lvl - mbLvlVtype[0] - 1), vtype: mbLvlVtype[1] }) },
           rlam: [ { guard: ({ rterm }) => typeof rterm.nameIcit === "string", clause: () => Result.throw({ msg: "Elaboration error: Cannot infer type for lambda with named argument" }) },
-            { guard: () => true, clause ({ rterm }) { return (this.mbType === null ?
-              Result.pure(this.freshMeta({ vtype: new this.VU() })) : this.check({ rterm: this.mbType, vtype: new this.VU() }))
+            { guard: () => true, clause ({ rterm }) { return (rterm.mbType === null ?
+              Result.pure(this.freshMeta({ vtype: new this.VU() })) : this.check({ rterm: rterm.mbType, vtype: new this.VU() }))
               .then(term => this.eval({ env: ctx.env, term }))
               .then(vtype => this.infer.withContext(this.bind({ name: rterm.name, vtype }), [ { rterm: rterm.body } ], res => res.then(this.insertNeutral))
                 .then(({ term, vtype: ivtype }) => ({ term: new this.Lam(rterm.name, term, rterm.nameIcit),
