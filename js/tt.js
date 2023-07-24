@@ -1315,7 +1315,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
         AppPruning: [ [ "term", "prun" ], { toString (names = AST.names(ctx), prec) { return (str => prec > 2 ? `(${str})` : str)
           (this.prun.reduce((str, mbIsImpl, i) => {
             if (mbIsImpl === null) return str;
-            const name = names[i], prun = (name === "_" ? "@." + i : name);
+            const name = names[i], prun = (name === "_" ? "@." + (this.prun.length - i - 1) : name);
             return str + " " + (mbIsImpl ? `{${prun}}` : prun)
           }, this.term.toString(names, prec))) } } ],
 
@@ -1492,18 +1492,18 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
           Result.pure([ 0, new Set(), new Map(), [], true ])).then(([ dom, {}, ren, prun, isLinear ]) =>
             ({ pren: { occ: null, dom, cod: lvl, ren }, mbPrun: isLinear ? prun : null })) },
 
-        pruneTy ({ revPrun, vtype }) { return revPrun.reduce((res, mbIsImpl) => res.then(([go, val, pren, fval = this.force({ val })], err) => {
+        pruneTy ({ revPrun, vtype }) { return revPrun.reduceRight((res, mbIsImpl) => res.then(([go, val, pren, fval = this.force({ val })], err) => {
           if (fval.constructor.name !== "VPi") return err({ msg: "Internal error: type too low arity for given pruning" });
           const appVal = this.cApp({ cls: fval.cls, val: new this.VRigid(pren.cod, []) });
           return mbIsImpl === null ? [ go, appVal, this.skipPRen(pren) ] :
-            this.rename({ pren, val: fval }).then(dom => [ tm => go(new this.Pi(fval.name, dom, tm, fval.isImpl)), appVal, this.liftPRen(pren) ]) }),
+            this.rename({ pren, val: fval.dom }).then(dom => [ tm => go(new this.Pi(fval.name, dom, tm, fval.isImpl)), appVal, this.liftPRen(pren) ]) }),
           Result.pure([tm => tm, vtype, { occ: null, dom: 0, cod: 0, ren: new Map() }]))
             .then(([go, vt, pr]) => this.rename({ pren: pr, val: vt }).then(tm => go(tm))) },
 
         pruneMeta ({ prun, mvar }) {
           const { val: hasVal, vtype } = gctx.metas.get(mvar);
           if (typeof hasVal !== "undefined") return Result.throw({ msg: "Internal error: meta already solved" });
-          return this.pruneTy({ revPrun: prun.reverse(), vtype }).then(prtype => {
+          return this.pruneTy({ revPrun: prun.toReversed(), vtype }).then(prtype => {
             const newMvar = this.nextMetaVar();
             gctx.metas.set(newMvar, { vtype: this.eval({ env: [], term: prtype }) });
             return this.lams({ lvl: prun.length, vtype, term: new this.AppPruning(new this.Meta(newMvar), prun) }).then(term => {
@@ -1524,7 +1524,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
           (this.force({ val }))), Result.pure([ [], this.OKRenaming ]))
             .then(([ sp, status ]) => (status === this.NeedsPruning ? this.pruneMeta({ prun: sp.map(([mbTm, icit]) => mbTm === null ? null : icit), mvar }) :
               "val" in gctx.metas.get(mvar) ? Result.throw({ msg: "Internal error: already solved" }) : Result.pure(mvar))
-              .then(mv => sp.reduceRight((acc, [mbTm, icit]) => mbTm === null ? acc : new this.App(acc, mbTm, icit), new this.Meta(mv)))) },
+              .then(mv => sp.reduce((acc, [mbTm, icit]) => mbTm === null ? acc : new this.App(acc, mbTm, icit), new this.Meta(mv)))) },
         renameSp ({ pren, term, spine }) { return spine.reduce((acc, [val, icit]) =>
           acc.then(func => this.rename({ val, pren }).then(arg => new this.App(func, arg, icit))), Result.pure(term)) },
         rename: Evaluator.match({
@@ -1550,7 +1550,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
         solveWithPRen ({ mvar, pren, mbPrun, val }) {
           const { val: hasVal, vtype } = gctx.metas.get(mvar);
           return (typeof hasVal !== "undefined" ? Result.throw({ msg: "Internal error: renaming already solved" }) : mbPrun === null ? Result.pure() :
-            this.pruneTy({ revPrun: mbPrun.reverse(), vtype })).then(() => this.rename({ pren: Object.assign(pren, { occ: mvar }), val }))
+            this.pruneTy({ revPrun: mbPrun.toReversed(), vtype })).then(() => this.rename({ pren: Object.assign(pren, { occ: mvar }), val }))
             .then(rhs => this.lams({ lvl: pren.dom, vtype, term: rhs }).then(term => gctx.metas.set(mvar, { vtype, val: this.eval({ env: [], term }) }))) },
 
         flexFlex ({ lvl, mvar0, spine0, mvar1, spine1 }) {
@@ -1785,7 +1785,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
         AppPruning: [ [ "term", "prun" ], { toString (names = AST.names(ctx), prec) {
           const str = this.prun.reduce((str, mbIsImpl, i) => {
             if (mbIsImpl === null) return str;
-            const name = names[i], prun = (name === "_" ? "@." + i : name);
+            const name = names[i], prun = (name === "_" ? "@." + (this.prun.length - i - 1) : name);
             return str + " " + (mbIsImpl ? `{${prun}}` : prun)
           }, this.term.toString(names, prec));
           return prec > 2 ? `(${str})` : str } } ],
@@ -1957,6 +1957,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
         ...((m, c) => ({
           nextMetaVar: () => m++,
           nextCheckVar: () => c++,
+          readNextCheckVar: () => c,
           reset: () => { m = 0; c = 0 },
         }))(0, 0),
         newRawMeta ({ blocking, vtype }) {
@@ -1996,15 +1997,18 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
             .then(term => this.unifyPlaceholder({ term, mvar: unchecked.mvar })
               .then(() => gctx.checks.set(checkvar, { checked: { term } })))) }
         }, { scrut: [ { fvtype ({ unchecked }) { return this.force({ val: unchecked.vtype }) } } ] }),
-        checkEverything ({ checkvar }) { return Array(checkvar).fill().reduce((res, _, c) => res.then(() => {
-          const problem = gctx.checks.get(c);
-          if (Object.keys(problem)[0] === "checked") return;
+        checkEverything () { const loop = (c, checkvar = this.readNextCheckVar()) => {
           debug.log("checkEverything", c, checkvar);
-          return this.infer.withContext(problem.unchecked.ctx, [ { rterm: problem.unchecked.rterm } ], res => res.then(this.insertNeutral)
-            .then(({ term, vtype }) => {
-              gctx.checks.set(c, { checked: { term } });
-              return this.unifyCatch({ val0: problem.unchecked.vtype, val1: vtype, unifyErr: this.ExpectedInferred })
-                .then(() => this.unifyPlaceholder({ term, mvar: problem.unchecked.mvar })) })) }), Result.pure()) },
+          if (c >= checkvar) return Result.pure();
+          else {
+            const problem = gctx.checks.get(c);
+            if (Object.keys(problem)[0] === "checked") return loop(c + 1);
+            return this.infer.withContext(problem.unchecked.ctx, [ { rterm: problem.unchecked.rterm } ], res => res.then(this.insertNeutral)
+              .then(({ term, vtype }) => {
+                gctx.checks.set(c, { checked: { term } });
+                return this.unifyCatch({ val0: problem.unchecked.vtype, val1: vtype, unifyErr: this.ExpectedInferred })
+                  .then(() => this.unifyPlaceholder({ term, mvar: problem.unchecked.mvar })) })).then(() => loop(c + 1)) } };
+          return loop(0) },
         
         liftPRen: ({ occ, dom, cod, ren }) => ({ occ, dom: dom + 1, cod: cod + 1, ren: new Map(ren).set(cod, dom) }),
         skipPRen: ({ occ, dom, cod, ren }) => ({ occ, dom, cod: cod + 1, ren }),
@@ -2016,17 +2020,17 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
           Result.pure([ 0, new Set(), new Map(), [], true ])).then(([ dom, {}, ren, prun, isLinear ]) =>
             ({ pren: { occ: null, dom, cod: lvl, ren }, mbPrun: isLinear ? prun : null })) },
 
-        pruneTy ({ revPrun, vtype }) { return revPrun.reduce((res, mbIsImpl) => res.then(([go, val, pren, fval = this.force({ val })], err) => {
+        pruneTy ({ revPrun, vtype }) { return revPrun.reduceRight((res, mbIsImpl) => res.then(([go, val, pren, fval = this.force({ val })], err) => {
           if (fval.constructor.name !== "VPi") return err({ msg: "Internal error: type too low arity for given pruning" });
           const appVal = this.cApp({ cls: fval.cls, val: new this.VRigid(pren.cod, []) });
           return mbIsImpl === null ? [ go, appVal, this.skipPRen(pren) ] :
-            this.rename({ pren, val: fval }).then(dom => [ tm => go(new this.Pi(fval.name, dom, tm, fval.isImpl)), appVal, this.liftPRen(pren) ]) }),
+            this.rename({ pren, val: fval.dom }).then(dom => [ tm => go(new this.Pi(fval.name, dom, tm, fval.isImpl)), appVal, this.liftPRen(pren) ]) }),
           Result.pure([tm => tm, vtype, { occ: null, dom: 0, cod: 0, ren: new Map() }]))
             .then(([go, vt, pr]) => this.rename({ pren: pr, val: vt }).then(tm => go(tm))) },
         pruneMeta ({ prun, mvar }) {
           const { blocking, vtype } = gctx.metas.get(mvar);
           if (typeof blocking === "undefined") return Result.throw({ msg: "Internal error: meta already solved while pruning" });
-          return this.pruneTy({ revPrun: prun.reverse(), vtype }).then(prtype => {
+          return this.pruneTy({ revPrun: prun.toReversed(), vtype }).then(prtype => {
             const newMvar = this.newRawMeta({ blocking, vtype: this.eval({ env: [], term: prtype }) });
             return this.lams({ lvl: prun.length, vtype, term: new this.AppPruning(new this.Meta(newMvar), prun) }).then(term => {
               gctx.metas.set(mvar, { vtype, val: this.eval({ env: [], term }) });
@@ -2043,7 +2047,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
                   err({ msg: "Unification error: can only prune renamings" }) } }), Result.pure([ [], OKRenaming ]))
             .then(([ sp, status ]) => (status === NeedsPruning ? this.pruneMeta({ prun: sp.map(([mbTm, icit]) => mbTm === null ? null : icit), mvar }) :
               "val" in gctx.metas.get(mvar) ? Result.throw({ msg: "Internal error: meta already solved while pruning a flex variable" }) : Result.pure(mvar))
-              .then(mv => sp.reduceRight((acc, [mbTm, icit]) => mbTm === null ? acc : new this.App(acc, mbTm, icit), new this.Meta(mv)))) })
+              .then(mv => sp.reduce((acc, [mbTm, icit]) => mbTm === null ? acc : new this.App(acc, mbTm, icit), new this.Meta(mv)))) })
           (Symbol("OKRenaming"), Symbol("OKNonRenaming"), Symbol("NeedsPruning")),
 
         renameSp ({ pren, term, spine }) { return spine.reduce((acc, [val, icit]) =>
@@ -2072,7 +2076,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
           debug.log("solve", mvar, this.quote({ lvl, val }));
           const { blocking, vtype } = gctx.metas.get(mvar);
           return (typeof blocking === "undefined" ? Result.throw({ msg: "Internal error: meta already solved" }) : mbPrun === null ? Result.pure() :
-            this.pruneTy({ revPrun: mbPrun.reverse(), vtype })).then(() => this.rename({ pren: Object.assign(pren, { occ: mvar }), val }))
+            this.pruneTy({ revPrun: mbPrun.toReversed(), vtype })).then(() => this.rename({ pren: Object.assign(pren, { occ: mvar }), val }))
             .then(rhs => this.lams({ lvl: pren.dom, vtype, term: rhs }).then(term => gctx.metas.set(mvar, { vtype, val: this.eval({ env: [], term }) })))
             .then(() => this.retryCheck({ blocking })) },
 
@@ -2209,7 +2213,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
               Result.throw({ msg: "Elaboration error: Implicit/explicit mismatch" });
             else { let dom = this.eval({ env: ctx.env, term: this.freshMeta({ vtype: new this.VU() }) });
               return Result.pure(this.freshMeta.withContext(this.bind({ name: "x", vtype: dom }), [ { vtype: new this.VU() } ])).then(im => ({ term: im, env: ctx.env }))
-                .then(cls => this.unifyCatch({ val0: new this.VPi("x", dom, cls), val1: vtype, unifyErr: this.ExpectedInferred }).then(() => [ dom, cls ])) } })(this.force({ val: vtype }))
+                .then(cls => this.unifyCatch({ val0: new this.VPi("x", dom, cls, isImpl), val1: vtype, unifyErr: this.ExpectedInferred }).then(() => [ dom, cls ])) } })(this.force({ val: vtype }))
             .then(([ dom, cls ]) => this.check({ rterm: rterm.arg, vtype: dom })
               .then(arg => ({ term: new this.App(term, arg, isImpl), vtype: this.cApp({ cls, val: this.eval({ env: ctx.env, term: arg }) }) })))) },
           ru () { return Result.pure({ term: new this.U(), vtype: new this.VU() }) },
@@ -2230,7 +2234,7 @@ debug = (p => new Proxy({}, { get (...args) { return debugFn(p)(...args) } }))(d
         doElab ({ rterm }) {
           this.reset();
           return this.infer({ rterm })
-            .then(res => this.checkEverything({ checkvar: this.nextCheckVar() }).then(() => res))
+            .then(res => this.checkEverything().then(() => res))
             .catch(this.displayError) },
         nf ({ data: rterm }) {
           debug.log("Expression normal form:");
